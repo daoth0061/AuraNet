@@ -1,0 +1,134 @@
+# AuraNet Configuration File
+# Global Configuration Parameters
+
+# Image processing
+img_size: [256, 256]  # [H, W]
+
+# Backbone architecture
+num_stages: 4  # Stages 2, 3, 4, 5 of the main backbone
+depths: [2, 2, 6, 2]  # Blocks per stage
+dims: [64, 128, 256, 512]  # Channels per stage
+
+# HAFT (Hierarchical Adaptive Frequency Transform) parameters
+num_haft_levels: [3, 3, 2, 1]  # Hierarchical levels for HAFT in each of the 4 stages
+num_radial_bins: 16
+context_vector_dim: 64
+
+# Final fusion and decoder parameters
+dsf_dim: 512  # Final Fusion Dimension
+decoder_embed_dim: 342
+decoder_depth: 1
+
+# Classification
+num_classes: 2
+
+# Model architecture hyperparameters
+model:
+  # Attention parameters
+  attention_heads: 8
+  attention_dropout: 0.0
+  
+  # MLP and FFN parameters  
+  mlp_hidden_dim: 128
+  ffn_hidden_ratio: 4  # FFN hidden dim = input_dim * ratio
+  
+  # Dropout rates
+  classification_dropout: 0.15
+  cross_fusion_dropout: 0.0
+  
+  # Reduction ratios for attention mechanisms
+  se_reduction: 16
+  cbam_reduction: 16
+  
+  # Contrastive learning
+  contrastive_projection_dim: 128
+  contrastive_hidden_dim: 512
+  
+  # AM-Softmax parameters
+  am_softmax_margin: 0.35
+  am_softmax_scale: 30.0
+  
+  # Block masking parameters
+  block_size: 16  # For random masking
+  
+  # Initial processing channels
+  msaf_srm_channels: 20
+  msaf_dwt_channels: 12
+  msaf_fused_channels: 32
+  initial_spatial_channels: 32
+  mbconv_expand_ratio: 4
+  
+  # HAFT internal parameters
+  haft_encoder_channels: [16, 32]  # [first_conv, second_conv]
+  haft_pooling_size: 4
+  
+  # Cross-attention offset scaling
+  deformable_offset_scale: 0.1
+
+# Data augmentation parameters
+data_augmentation:
+  # Common augmentations
+  horizontal_flip_prob: 0.5
+  rotation_degrees: 15
+  
+  # Color jitter for pre-training
+  brightness: 0.2
+  contrast: 0.2
+  saturation: 0.2
+  hue: 0.1
+  
+  # Normalization (ImageNet stats)
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+# Training parameters
+training:
+  # Pre-training stage
+  pretrain:
+    batch_size: 32
+    learning_rate: 1e-4
+    epochs: 100
+    mask_ratio: 0.6
+    weight_decay: 0.05
+    warmup_epochs: 5
+    
+    # Loss weights
+    image_loss_weight: 1.0
+    mask_loss_weight: 1.0
+    supcon_loss_weight: 0.5
+    
+    # SSIM loss weight in mask reconstruction
+    ssim_weight: 0.15
+    l1_weight: 0.85
+    
+    # Contrastive learning
+    supcon_temperature: 0.1
+
+  # Fine-tuning stage
+  finetune:
+    batch_size: 16
+    encoder_lr: 1e-5  # Small LR for pre-trained encoder
+    head_lr: 1e-3     # Larger LR for new heads
+    epochs: 50
+    weight_decay: 0.05
+    warmup_epochs: 5
+    
+    # Loss weights
+    seg_loss_weight: 1.0
+    class_loss_weight: 1.0
+    
+    # SSIM loss weight in segmentation
+    seg_ssim_weight: 0.15
+    seg_l1_weight: 0.85
+
+# Data loading parameters
+data_loading:
+  num_workers: 4
+  pin_memory: true
+  drop_last: true  # For training
+  
+# Evaluation parameters  
+evaluation:
+  batch_size: 32
+  save_predictions: true
+  visualize_results: true
