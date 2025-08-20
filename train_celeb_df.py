@@ -23,7 +23,7 @@ import wandb
 from tensorboardX import SummaryWriter
 
 # Add src directory to path
-sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent / 'src'))
 
 from auranet import create_auranet
 from celeb_df_dataset import CelebDFDataset

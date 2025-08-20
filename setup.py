@@ -22,7 +22,8 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/your-username/AuraNet",
-    packages=find_packages(),
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -57,9 +58,9 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "auranet-train=src.train:main",
-            "auranet-evaluate=src.evaluate:main",
-            "auranet-demo=src.demo:main",
+            "auranet-train=train:main",
+            "auranet-evaluate=evaluate:main",
+            "auranet-demo=demo:main",
         ],
     },
     include_package_data=True,

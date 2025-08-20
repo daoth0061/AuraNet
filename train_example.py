@@ -15,8 +15,9 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent / 'src'))
 
-from src import create_auranet, AuraNetTrainer
-from src.data_loader import create_sample_annotations, create_data_loaders
+from auranet import create_auranet
+from train import AuraNetTrainer
+from data_loader import create_sample_annotations, create_data_loaders
 
 
 def setup_sample_dataset(data_root):

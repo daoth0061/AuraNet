@@ -17,14 +17,15 @@ def test_imports():
     print("Testing imports...")
     
     try:
-        from src import create_auranet, AuraNetTrainer
+        from auranet import create_auranet
+        from train import AuraNetTrainer
         print("✓ Core modules imported successfully")
     except Exception as e:
         print(f"✗ Failed to import core modules: {e}")
         return False
     
     try:
-        from src.utils import LayerNorm, Block, GRN, CBAMChannelAttention
+        from utils import LayerNorm, Block, GRN, CBAMChannelAttention
         print("✓ Utility modules imported successfully") 
     except Exception as e:
         print(f"✗ Failed to import utility modules: {e}")
