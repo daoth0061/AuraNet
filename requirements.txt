@@ -1,9 +1,9 @@
 # Requirements for AuraNet Project
 
-# Core deep learning dependencies
-torch>=1.12.0
-torchvision>=0.13.0
-torchaudio>=0.12.0
+# Core deep learning dependencies (CUDA 12.6 compatible)
+torch>=2.4.0
+torchvision>=0.19.0
+torchaudio>=2.4.0
 
 # Additional PyTorch utilities
 pytorch-lightning>=1.8.0
