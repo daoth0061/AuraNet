@@ -320,7 +320,7 @@ def get_optimizer(model, mode='finetune', config=None):
     elif isinstance(config, str):
         with open(config, 'r') as f:
             config = yaml.safe_load(f)
-    
+    print(f"My mode is: {mode}")
     if mode == 'pretrain':
         # Single learning rate for pre-training
         pretrain_lr = config['training']['pretrain']['learning_rate']
@@ -345,11 +345,16 @@ def get_optimizer(model, mode='finetune', config=None):
         
         # Create parameter groups
         param_groups = [
-            {'params': encoder_params, 'lr': encoder_lr},
-            {'params': head_params, 'lr': head_lr}
+            {'params': encoder_params},
+            {'params': head_params}
         ]
         
-        optimizer = torch.optim.AdamW(param_groups, weight_decay=weight_decay)
+        # Elegant fix: Initialize with a placeholder LR, then set group-specific LRs.
+        # This ensures group['initial_lr'] is a float, not a list, preventing a TypeError
+        # in the LambdaLR scheduler.
+        optimizer = torch.optim.AdamW(param_groups, lr=head_lr, weight_decay=weight_decay)
+        optimizer.param_groups[0]['lr'] = encoder_lr
+        optimizer.param_groups[1]['lr'] = head_lr
     
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -378,6 +383,10 @@ def get_scheduler(optimizer, mode, config=None):
         with open(config, 'r') as f:
             config = yaml.safe_load(f)
     
+    # Validate mode
+    if mode not in ['pretrain', 'finetune']:
+        raise ValueError(f"Invalid mode '{mode}'. Must be 'pretrain' or 'finetune'.")
+
     # Get parameters based on mode
     if mode == 'pretrain':
         num_epochs = config['training']['pretrain']['epochs']
@@ -386,26 +395,16 @@ def get_scheduler(optimizer, mode, config=None):
         num_epochs = config['training']['finetune']['epochs']
         warmup_epochs = config['training']['finetune']['warmup_epochs']
     def lr_lambda(epoch):
+        """Cosine decay with warmup."""
         if epoch < warmup_epochs:
-            return (epoch + 1) / warmup_epochs
+            # Linear warmup
+            return float(epoch + 1) / float(max(1, warmup_epochs))
         else:
-            return 0.5 * (1 + math.cos(math.pi * (epoch - warmup_epochs) / (num_epochs - warmup_epochs)))
-    
-    # Check if optimizer has multiple parameter groups
-    if len(optimizer.param_groups) > 1:
-        # Create separate lambda functions for each parameter group
-        def make_lr_lambda():
-            def _lr_lambda(epoch):
-                if epoch < warmup_epochs:
-                    return (epoch + 1) / warmup_epochs
-                else:
-                    return 0.5 * (1 + math.cos(math.pi * (epoch - warmup_epochs) / (num_epochs - warmup_epochs)))
-            return _lr_lambda
-        
-        lr_lambda_list = [make_lr_lambda() for _ in range(len(optimizer.param_groups))]
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_list)
-    else:
-        # Single parameter group
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            # Cosine decay
+            progress = float(epoch - warmup_epochs) / float(max(1, num_epochs - warmup_epochs))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    # LambdaLR will apply the same lr_lambda to all parameter groups
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     return scheduler

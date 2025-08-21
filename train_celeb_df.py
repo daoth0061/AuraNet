@@ -35,10 +35,11 @@ from evaluate import AuraNetEvaluator
 class DistributedTrainer:
     """Distributed trainer for AuraNet on Celeb-DF dataset."""
     
-    def __init__(self, rank: int, world_size: int, config: Dict):
+    def __init__(self, rank: int, world_size: int, config: Dict, mode: str):
         self.rank = rank
         self.world_size = world_size
         self.config = config
+        self.mode = mode
         self.device = torch.device(f'cuda:{rank}')
         
         # Setup logging
@@ -115,7 +116,7 @@ class DistributedTrainer:
     
     def _setup_data_loaders(self):
         """Setup distributed data loaders."""
-        mode = getattr(self, 'training_mode', 'finetune')
+        mode = self.mode
         
         # Create datasets
         train_dataset = CelebDFDataset(
@@ -182,7 +183,7 @@ class DistributedTrainer:
     
     def _setup_criterion(self):
         """Setup loss function."""
-        mode = getattr(self, 'training_mode', 'finetune')
+        mode = self.mode
         
         if mode == 'pretrain':
             return CombinedPretrainLoss(config=self.config)
@@ -191,13 +192,11 @@ class DistributedTrainer:
     
     def _setup_optimizer(self):
         """Setup optimizer."""
-        mode = getattr(self, 'training_mode', 'finetune')
-        return get_optimizer(self.model, mode=mode, config=self.config)
+        return get_optimizer(self.model, mode=self.mode, config=self.config)
     
     def _setup_scheduler(self):
         """Setup learning rate scheduler."""
-        mode = getattr(self, 'training_mode', 'finetune')
-        return get_scheduler(self.optimizer, mode=mode, config=self.config)
+        return get_scheduler(self.optimizer, mode=self.mode, config=self.config)
     
     def _setup_logging_tools(self):
         """Setup tensorboard and wandb logging (only on rank 0)."""
@@ -369,9 +368,9 @@ class DistributedTrainer:
             oldest = checkpoints.pop(0)
             oldest.unlink()
     
-    def train(self, mode: str = 'finetune'):
+    def train(self):
         """Main training loop."""
-        self.training_mode = mode
+        mode = self.mode
         
         # Get training configuration
         if mode == 'pretrain':
@@ -479,10 +478,10 @@ def main_worker(rank: int, world_size: int, config: Dict, mode: str):
         setup_distributed(rank, world_size, config['distributed']['backend'])
         
         # Create trainer
-        trainer = DistributedTrainer(rank, world_size, config)
+        trainer = DistributedTrainer(rank, world_size, config, mode)
         
         # Start training
-        trainer.train(mode)
+        trainer.train()
         
     except Exception as e:
         logging.error(f"Error in worker {rank}: {str(e)}")
@@ -527,8 +526,8 @@ def main():
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         
         # Create single GPU trainer (simplified version)
-        trainer = DistributedTrainer(0, 1, config)
-        trainer.train(args.mode)
+        trainer = DistributedTrainer(0, 1, config, args.mode)
+        trainer.train()
     else:
         # Multi-GPU training
         print(f'Starting distributed training on {world_size} GPUs')
