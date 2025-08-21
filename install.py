@@ -38,9 +38,18 @@ def main():
         print("Error: Please run this script from the AuraNet root directory")
         sys.exit(1)
     
+    # Test import structure first
+    print("Testing import structure...")
+    if not run_command("python test_imports.py", "Checking import fixes"):
+        print("Import structure issues detected. Please check the error messages.")
+        return False
+    
     # Install requirements
+    print("\nInstalling requirements...")
     if not run_command("pip install -r requirements.txt", "Installing requirements"):
         print("Failed to install requirements. Please check the error messages above.")
+        print("You may need to install PyTorch manually for your CUDA version:")
+        print("  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126")
         return False
     
     # Install the package in development mode
@@ -50,10 +59,18 @@ def main():
     
     print("\n=== Installation Complete ===")
     print("AuraNet has been installed successfully!")
-    print("\nYou can now run:")
-    print("  python train_celeb_df.py --help")
-    print("  python launch_training.py --help")
-    print("  python analyze_celeb_df.py --help")
+    print("\n🚀 Quick Start:")
+    print("  # Analyze Celeb-DF dataset")
+    print("  python analyze_celeb_df.py --data_root /path/to/celeb_df")
+    print()
+    print("  # Launch training")  
+    print("  python launch_training.py --config config_celeb_df.yaml --data_root /path/to/celeb_df")
+    print()
+    print("  # Direct training")
+    print("  python train_celeb_df.py --data_root /path/to/celeb_df")
+    print()
+    print("  # Or use the run script (no installation required)")
+    print("  python run.py train_celeb_df.py --help")
     
     return True
 

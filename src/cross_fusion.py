@@ -6,7 +6,7 @@ Implements Deformable and Standard Cross-Attention mechanisms
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .utils import LayerNorm, create_grid_like, normalize_grid, ContinuousPositionalBias
+from utils import LayerNorm, create_grid_like, normalize_grid, ContinuousPositionalBias
 import yaml
 import os
 

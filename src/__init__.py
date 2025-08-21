@@ -29,10 +29,10 @@ Example Usage:
     ```
 """
 
-from .auranet import create_auranet, AuraNet
-from .train import AuraNetTrainer
-from .data_loader import AuraNetDataset, create_data_loaders
-from .training import (
+from auranet import create_auranet, AuraNet
+from train import AuraNetTrainer
+from data_loader import AuraNetDataset, create_data_loaders
+from training import (
     CombinedPretrainLoss, 
     CombinedFinetuneLoss,
     get_optimizer,

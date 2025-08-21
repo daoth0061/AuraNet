@@ -17,7 +17,7 @@ from tqdm import tqdm
 import os
 import json
 
-from .auranet import create_auranet
+from auranet import create_auranet
 
 
 class AuraNetEvaluator:
@@ -330,7 +330,7 @@ def main():
             print("Please provide --data_root and --annotations for dataset evaluation")
             return
         
-        from .data_loader import create_data_loaders
+        from data_loader import create_data_loaders
         
         # Create data loader
         _, val_loader = create_data_loaders(

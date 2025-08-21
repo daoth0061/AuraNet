@@ -6,7 +6,7 @@ Implements DSF, ClassificationHead, and SegmentationHead
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .utils import LayerNorm, Block, CBAMChannelAttention
+from utils import LayerNorm, Block, CBAMChannelAttention
 import yaml
 import os
 

@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pywt
 import numpy as np
-from .utils import LayerNorm, SEBlock, CBAMChannelAttention, CBAMSpatialAttention
+from utils import LayerNorm, SEBlock, CBAMChannelAttention, CBAMSpatialAttention
 import yaml
 import os
 

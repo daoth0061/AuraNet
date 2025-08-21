@@ -6,12 +6,12 @@ Dual-Stream Forensic Network for Face Manipulation Detection
 import torch
 import torch.nn as nn
 import yaml
-from .initial_processing import MSAF, MBConvDownsample, InitialSpatialStem
-from .haft import HAFT
-from .cross_fusion import CrossFusionBlock
-from .output_heads import DSF, ClassificationHead, SegmentationHead
-from .output_heads import ImageDecoder, MaskDecoder, ContrastiveProjectionHead
-from .utils import Block, LayerNorm
+from initial_processing import MSAF, MBConvDownsample, InitialSpatialStem
+from haft import HAFT
+from cross_fusion import CrossFusionBlock
+from output_heads import DSF, ClassificationHead, SegmentationHead
+from output_heads import ImageDecoder, MaskDecoder, ContrastiveProjectionHead
+from utils import Block, LayerNorm
 
 
 class DownsampleLayer(nn.Module):

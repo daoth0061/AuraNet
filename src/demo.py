@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 
-from .auranet import create_auranet
-from .evaluate import AuraNetEvaluator
+from auranet import create_auranet
+from evaluate import AuraNetEvaluator
 
 
 def create_demo_model():
@@ -76,7 +76,7 @@ def demo_individual_components():
     
     # Test MSAF
     print("Testing MSAF component...")
-    from .initial_processing import MSAF
+    from initial_processing import MSAF
     
     msaf = MSAF()
     test_input = torch.randn(1, 3, 256, 256)
@@ -90,7 +90,7 @@ def demo_individual_components():
     
     # Test HAFT
     print("Testing HAFT component...")
-    from .haft import HAFT
+    from haft import HAFT
     
     haft = HAFT(in_channels=64, num_haft_levels=3)
     test_input = torch.randn(1, 64, 64, 64)
@@ -104,7 +104,7 @@ def demo_individual_components():
     
     # Test Cross-Fusion
     print("Testing Cross-Fusion component...")
-    from .cross_fusion import CrossFusionBlock
+    from cross_fusion import CrossFusionBlock
     
     cross_fusion = CrossFusionBlock(dim=64, use_deformable=True)
     spatial_feat = torch.randn(1, 64, 32, 32)
@@ -119,7 +119,7 @@ def demo_individual_components():
     
     # Test DSF
     print("Testing DSF component...")
-    from .output_heads import DSF
+    from output_heads import DSF
     
     dsf = DSF(dim=512)
     spatial_feat = torch.randn(1, 512, 8, 8)
