@@ -124,7 +124,7 @@ def reconstruct_radial_filter(profile_1d, patch_size):
     d_indices = torch.floor(d_normalized).long().clamp(0, num_bins - 1)
     
     # Create 2D filter by indexing the 1D profile
-    filter_2d = torch.zeros(B, 1, H, W)
+    filter_2d = torch.zeros(B, 1, H, W, device=device)
     for b in range(B):
         filter_2d[b, 0] = profile_1d[b][d_indices]
     
@@ -245,11 +245,26 @@ class HAFT(nn.Module):
                 for level in range(len(hierarchical_contexts)):
                     level_contexts = hierarchical_contexts[level]
                     
+                    # Map patch index to the appropriate index at this level
+                    level_patches_per_side = 2 ** level
+                    if level_patches_per_side == 0:  # Level 0 (global context)
+                        mapped_patch_idx = 0
+                    else:
+                        # Calculate which patch at this level corresponds to the deepest level patch
+                        scale_factor = num_patches_per_side // level_patches_per_side
+                        if scale_factor <= 1:
+                            mapped_patch_idx = min(patch_idx, level_contexts.shape[1] - 1)
+                        else:
+                            row_idx = (patch_idx // num_patches_per_side) // scale_factor
+                            col_idx = (patch_idx % num_patches_per_side) // scale_factor
+                            mapped_patch_idx = row_idx * level_patches_per_side + col_idx
+                            mapped_patch_idx = min(mapped_patch_idx, level_contexts.shape[1] - 1)
+                    
                     # Add level embedding - use Linear layer instead of Embedding
                     level_input = torch.tensor([[float(level)]], device=channel_features.device, dtype=torch.float32)
                     level_input = level_input.expand(channel_features.shape[0], -1)  # (B, 1)
                     level_emb = self.level_projection(level_input)  # (B, 2*context_dim)
-                    enriched_context = level_contexts[:, patch_idx] + level_emb
+                    enriched_context = level_contexts[:, mapped_patch_idx] + level_emb
                     ancestral_contexts.append(enriched_context)
                 
                 # Concatenate all ancestral contexts
