@@ -109,16 +109,17 @@ def reconstruct_radial_filter(profile_1d, patch_size):
     B, num_bins = profile_1d.shape
     H, W = patch_size
     
-    # Create coordinate grid
-    u = torch.arange(H, dtype=torch.float32).view(-1, 1)
-    v = torch.arange(W, dtype=torch.float32).view(1, -1)
+    # Create coordinate grid on the same device as profile_1d
+    device = profile_1d.device
+    u = torch.arange(H, dtype=torch.float32, device=device).view(-1, 1)
+    v = torch.arange(W, dtype=torch.float32, device=device).view(1, -1)
     
     # Calculate Chebyshev distance from center
     center_u, center_v = H / 2.0, W / 2.0
     d = torch.maximum(torch.abs(u - center_u), torch.abs(v - center_v))
     
     # Normalize distance to [0, num_bins-1] range
-    max_d = torch.maximum(torch.tensor(center_u), torch.tensor(center_v))
+    max_d = torch.maximum(torch.tensor(center_u, device=device), torch.tensor(center_v, device=device))
     d_normalized = d / max_d * (num_bins - 1)
     d_indices = torch.floor(d_normalized).long().clamp(0, num_bins - 1)
     
@@ -148,8 +149,8 @@ class HAFT(nn.Module):
         filter_input_dim = num_haft_levels * context_vector_dim
         self.filter_predictor = FilterPredictor(filter_input_dim, num_radial_bins)
         
-        # Level embeddings for hierarchical processing
-        self.level_embedding = nn.Embedding(num_haft_levels, 2 * context_vector_dim)
+        # Level embeddings for hierarchical processing - use Linear instead of Embedding
+        self.level_projection = nn.Linear(1, 2 * context_vector_dim)
         
         # Output projection to maintain channel dimensions
         self.output_proj = nn.Conv2d(in_channels, in_channels, kernel_size=1)
@@ -208,7 +209,8 @@ class HAFT(nn.Module):
                     # Apply FFT
                     patch_fft = torch.fft.fft2(patch.squeeze(1))
                     magnitude = torch.abs(patch_fft).unsqueeze(1)
-                    phase = torch.angle(patch_fft).unsqueeze(1)
+                    # Use atan2 instead of angle to avoid CUDA kernel compilation issues
+                    phase = torch.atan2(patch_fft.imag, patch_fft.real).unsqueeze(1)
                     
                     # Get context vectors
                     cv_mag = self.freq_context_encoder(magnitude, level, 'mag')
@@ -243,8 +245,10 @@ class HAFT(nn.Module):
                 for level in range(len(hierarchical_contexts)):
                     level_contexts = hierarchical_contexts[level]
                     
-                    # Add level embedding
-                    level_emb = self.level_embedding(torch.tensor(level))
+                    # Add level embedding - use Linear layer instead of Embedding
+                    level_input = torch.tensor([[float(level)]], device=channel_features.device, dtype=torch.float32)
+                    level_input = level_input.expand(channel_features.shape[0], -1)  # (B, 1)
+                    level_emb = self.level_projection(level_input)  # (B, 2*context_dim)
                     enriched_context = level_contexts[:, patch_idx] + level_emb
                     ancestral_contexts.append(enriched_context)
                 
@@ -274,7 +278,8 @@ class HAFT(nn.Module):
                 # Apply frequency domain filtering
                 patch_fft = torch.fft.fft2(original_patch.squeeze(1))
                 magnitude = torch.abs(patch_fft)
-                phase = torch.angle(patch_fft)
+                # Use atan2 instead of angle to avoid CUDA kernel compilation issues
+                phase = torch.atan2(patch_fft.imag, patch_fft.real)
                 
                 # Apply learned filters
                 enhanced_magnitude = magnitude * mag_filter_2d.squeeze(1)
