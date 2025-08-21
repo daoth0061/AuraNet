@@ -298,7 +298,8 @@ class CelebDFDataset(Dataset):
             'ground_truth_mask': gt_mask,
             'label': torch.tensor(sample['label'], dtype=torch.long),
             'video_id': sample['video_id'],
-            'frame_info': sample['frame_info']
+            'frame_info': sample['frame_info'],
+            'image_path': sample['image_path']
         }
     
     def _get_finetune_sample(self, image_tensor: torch.Tensor, sample: Dict):
@@ -321,7 +322,8 @@ class CelebDFDataset(Dataset):
             'mask': mask,
             'label': torch.tensor(sample['label'], dtype=torch.long),
             'video_id': sample['video_id'],
-            'frame_info': sample['frame_info']
+            'frame_info': sample['frame_info'],
+            'image_path': sample['image_path']
         }
     
     def _create_random_mask(self, shape: Tuple, mask_ratio: float, block_size: int):

@@ -121,6 +121,8 @@ def main():
     parser = argparse.ArgumentParser(description='Launch AuraNet Training on Celeb-DF')
     parser.add_argument('--data_root', type=str, required=True,
                        help='Root directory of Celeb-DF dataset')
+    parser.add_argument('--mask_gt_dir', type=str, default=None,
+                       help='Directory containing ground truth masks for evaluation (e.g., /kaggle/input/ff-mask/)')
     parser.add_argument('--config', type=str, default='config_celeb_df.yaml',
                        help='Configuration file path')
     parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune', 'both'],
@@ -211,6 +213,13 @@ def main():
     
     # Set data root in config
     config_updates['dataset.data_root'] = args.data_root
+    
+    # Set mask GT directory (default to Celeb_DF_Mask if not provided)
+    if args.mask_gt_dir:
+        config_updates['evaluation.mask_gt_dir'] = args.mask_gt_dir
+    else:
+        # Default to the standard Celeb-DF mask directory
+        config_updates['evaluation.mask_gt_dir'] = 'Celeb_DF_Mask'
     
     # Update distributed settings
     if effective_num_gpus > 1:

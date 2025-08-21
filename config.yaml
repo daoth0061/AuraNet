@@ -86,7 +86,7 @@ training:
   # Pre-training stage
   pretrain:
     batch_size: 32
-    learning_rate: 1e-4
+    learning_rate: 0.0001  # 1e-4
     epochs: 100
     mask_ratio: 0.6
     weight_decay: 0.05
@@ -107,8 +107,8 @@ training:
   # Fine-tuning stage
   finetune:
     batch_size: 16
-    encoder_lr: 1e-5  # Small LR for pre-trained encoder
-    head_lr: 1e-3     # Larger LR for new heads
+    encoder_lr: 0.00001  # 1e-5, Small LR for pre-trained encoder
+    head_lr: 0.001       # 1e-3, Larger LR for new heads
     epochs: 50
     weight_decay: 0.05
     warmup_epochs: 5

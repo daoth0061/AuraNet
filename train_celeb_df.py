@@ -29,7 +29,7 @@ from auranet import create_auranet
 from celeb_df_dataset import CelebDFDataset
 from training import (CombinedPretrainLoss, CombinedFinetuneLoss, 
                      get_optimizer, get_scheduler)
-from evaluate import AuraNetEvaluator
+from training_evaluator import TrainingEvaluator
 
 
 class DistributedTrainer:
@@ -59,9 +59,12 @@ class DistributedTrainer:
         self.optimizer = self._setup_optimizer()
         self.scheduler = self._setup_scheduler()
         
+        # Setup evaluation
+        mask_gt_dir = self.config.get('evaluation', {}).get('mask_gt_dir', None)
+        self.evaluator = TrainingEvaluator(config=self.config, mask_gt_dir=mask_gt_dir, device=self.device)
+        
         # Setup logging and checkpointing
         self.writer = None
-        self.evaluator = None
         if self.rank == 0:
             self._setup_logging_tools()
         
@@ -99,8 +102,9 @@ class DistributedTrainer:
         model = create_auranet(config=self.config)
         model = model.to(self.device)
         
-        # Wrap with DDP
-        model = DDP(model, device_ids=[self.rank], find_unused_parameters=True)
+        # Wrap with DDP only if using multiple GPUs
+        if self.world_size > 1:
+            model = DDP(model, device_ids=[self.rank], find_unused_parameters=True)
         
         # Enable mixed precision if configured
         if self.config.get('mixed_precision', False):
@@ -216,8 +220,7 @@ class DistributedTrainer:
                 name=f"auranet_celeb_df_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
         
-        # Setup evaluator
-        self.evaluator = AuraNetEvaluator(config=self.config)
+        # Note: AuraNetEvaluator is for inference only, not needed during training
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch."""
@@ -239,7 +242,7 @@ class DistributedTrainer:
             if self.scaler is not None:
                 # Mixed precision training
                 with torch.cuda.amp.autocast():
-                    outputs = self.model(batch['image'])
+                    outputs = self.model(batch['image'], mode=self.mode)
                     loss = self.criterion(outputs, batch)
                 
                 self.scaler.scale(loss).backward()
@@ -247,7 +250,7 @@ class DistributedTrainer:
                 self.scaler.update()
             else:
                 # Regular training
-                outputs = self.model(batch['image'])
+                outputs = self.model(batch['image'], mode=self.mode)
                 loss = self.criterion(outputs, batch)
                 loss.backward()
                 self.optimizer.step()
@@ -278,7 +281,7 @@ class DistributedTrainer:
         return {'train_loss': avg_loss}
     
     def validate_epoch(self) -> Dict[str, float]:
-        """Validate for one epoch."""
+        """Validate for one epoch with comprehensive evaluation."""
         self.model.eval()
         total_loss = 0.0
         num_batches = len(self.val_loader)
@@ -295,36 +298,48 @@ class DistributedTrainer:
                 # Forward pass
                 if self.scaler is not None:
                     with torch.cuda.amp.autocast():
-                        outputs = self.model(batch['image'])
+                        outputs = self.model(batch['image'], mode=self.mode)
                         loss = self.criterion(outputs, batch)
                 else:
-                    outputs = self.model(batch['image'])
+                    outputs = self.model(batch['image'], mode=self.mode)
                     loss = self.criterion(outputs, batch)
                 
                 total_loss += loss.item()
                 
-                # Collect predictions for evaluation
+                # Collect predictions for basic metrics
                 if 'classification_logits' in outputs:
                     predictions = torch.softmax(outputs['classification_logits'], dim=1)
                     all_predictions.append(predictions.cpu())
                     all_labels.append(batch['label'].cpu())
         
         avg_loss = total_loss / num_batches
-        
-        # Calculate metrics
         metrics = {'val_loss': avg_loss}
         
+        # Basic accuracy for backward compatibility
         if all_predictions and self.rank == 0:
             all_predictions = torch.cat(all_predictions, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
             
-            # Calculate additional metrics
-            eval_metrics = self.evaluator.calculate_metrics(all_predictions, all_labels)
-            metrics.update(eval_metrics)
+            # Calculate basic accuracy
+            predicted_labels = torch.argmax(all_predictions, dim=1)
+            accuracy = (predicted_labels == all_labels).float().mean().item()
+            metrics['accuracy'] = accuracy
+        
+        # Comprehensive evaluation using TrainingEvaluator
+        if self.rank == 0 and hasattr(self, 'evaluator'):
+            try:
+                eval_metrics = self.evaluator.evaluate_epoch(self.model, self.val_loader, self.mode)
+                metrics.update(eval_metrics)
+                
+                # Log detailed metrics
+                self.evaluator.log_metrics(eval_metrics, self.epoch, 'validation')
+                
+            except Exception as e:
+                self.logger.warning(f"Comprehensive evaluation failed: {e}")
         
         return metrics
     
-    def save_checkpoint(self, metrics: Dict[str, float], is_best: bool = False):
+    def  save_checkpoint(self, metrics: Dict[str, float], is_best: bool = False):
         """Save model checkpoint (only on rank 0)."""
         if self.rank != 0:
             return
@@ -335,7 +350,7 @@ class DistributedTrainer:
         checkpoint = {
             'epoch': self.epoch,
             'global_step': self.global_step,
-            'model_state_dict': self.model.module.state_dict(),
+            'model_state_dict': self.model.module.state_dict() if self.world_size > 1 else self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'metrics': metrics,

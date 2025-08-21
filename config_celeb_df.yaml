@@ -112,7 +112,7 @@ training:
   # Pre-training stage
   pretrain:
     batch_size: 16    # Per GPU batch size
-    learning_rate: 1e-4
+    learning_rate: 0.0001  # 1e-4
     epochs: 50        # Reduced for Celeb-DF
     mask_ratio: 0.6
     weight_decay: 0.05
@@ -132,13 +132,13 @@ training:
     
     # Early stopping
     patience: 10
-    min_delta: 1e-4
+    min_delta: 0.0001  # 1e-4
 
   # Fine-tuning stage
   finetune:
     batch_size: 8     # Per GPU batch size (smaller for fine-tuning)
-    encoder_lr: 1e-5  # Small LR for pre-trained encoder
-    head_lr: 1e-3     # Larger LR for new heads
+    encoder_lr: 0.00001  # 1e-5, Small LR for pre-trained encoder
+    head_lr: 0.001       # 1e-3, Larger LR for new heads
     epochs: 30        # Reduced for Celeb-DF
     weight_decay: 0.05
     warmup_epochs: 3
@@ -153,7 +153,7 @@ training:
     
     # Early stopping
     patience: 8
-    min_delta: 1e-4
+    min_delta: 0.0001  # 1e-4
 
 # Data loading parameters
 data_loading:
@@ -169,6 +169,8 @@ evaluation:
   save_predictions: true
   visualize_results: true
   metrics: ["accuracy", "precision", "recall", "f1", "auc", "ap"]
+  mask_gt_dir: "Celeb_DF_Mask"  # Path to ground truth masks for mask evaluation (relative to data_root)
+  detailed_eval_freq: 1  # Run detailed evaluation every N epochs (1 = every epoch)
   
 # Checkpointing and logging
 checkpoint:

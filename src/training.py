@@ -10,6 +10,7 @@ from pytorch_metric_learning import losses
 from pytorch_msssim import ssim
 import yaml
 import os
+from config_utils import safe_load_config, load_config_safe
 
 
 class ImageReconstructionLoss(nn.Module):
@@ -283,11 +284,11 @@ def create_random_mask(shape, config=None):
     # Load config if provided
     if config is None:
         config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        config = safe_load_config(config_path)
     elif isinstance(config, str):
-        with open(config, 'r') as f:
-            config = yaml.safe_load(f)
+        config = safe_load_config(config)
+    else:
+        config = load_config_safe(config)
     
     mask_ratio = config['training']['pretrain']['mask_ratio']
     
@@ -315,16 +316,17 @@ def get_optimizer(model, mode='finetune', config=None):
     # Load config if provided
     if config is None:
         config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        config = safe_load_config(config_path)
     elif isinstance(config, str):
-        with open(config, 'r') as f:
-            config = yaml.safe_load(f)
+        config = safe_load_config(config)
+    else:
+        config = load_config_safe(config)
     print(f"My mode is: {mode}")
     if mode == 'pretrain':
         # Single learning rate for pre-training
         pretrain_lr = config['training']['pretrain']['learning_rate']
         weight_decay = config['training']['pretrain']['weight_decay']
+        print(f"Pretrain lr: {type(pretrain_lr)}, weight decay: {type(weight_decay)} ")
         optimizer = torch.optim.AdamW(model.parameters(), lr=pretrain_lr, weight_decay=weight_decay)
     
     elif mode == 'finetune':
@@ -377,11 +379,11 @@ def get_scheduler(optimizer, mode, config=None):
     # Load config if provided
     if config is None:
         config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        config = safe_load_config(config_path)
     elif isinstance(config, str):
-        with open(config, 'r') as f:
-            config = yaml.safe_load(f)
+        config = safe_load_config(config)
+    else:
+        config = load_config_safe(config)
     
     # Validate mode
     if mode not in ['pretrain', 'finetune']:
