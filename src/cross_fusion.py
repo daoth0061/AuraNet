@@ -260,8 +260,8 @@ class CrossFusionBlock(nn.Module):
             enhanced_freq: (B, C, H, W)
         """
         # Bidirectional cross-attention
-        enhanced_spatial = self.spatial_enhancer(query=spatial_feat, kv=freq_feat)
-        enhanced_freq = self.frequency_enhancer(query=freq_feat, kv=spatial_feat)
+        enhanced_spatial = self.spatial_enhancer(spatial_feat, freq_feat)
+        enhanced_freq = self.frequency_enhancer(freq_feat, spatial_feat)
         
         # Spatial stream: Residual -> Norm -> FFN -> Residual -> Norm
         spatial_out = spatial_feat + enhanced_spatial
