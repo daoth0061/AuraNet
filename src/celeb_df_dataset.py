@@ -47,9 +47,7 @@ class CelebDFDataset(Dataset):
         self.dataset_config = config['dataset']
         self.img_size = tuple(config['img_size'])
         self.split_ratio = self.dataset_config['split_ratio']
-        self.frame_modulo = self.dataset_config['frame_modulo']
-        self.split_modulo = self.dataset_config['split_modulo']
-        self.test_remainder = self.dataset_config['test_remainder']
+        self.split_modulo = self.dataset_config['split_modulo']  # Default: 4 (75% train, 25% test)
         
         # Build dataset
         self.samples = self._build_dataset()
@@ -166,19 +164,30 @@ class CelebDFDataset(Dataset):
             }
     
     def _apply_split_strategy(self, samples: List[Dict]) -> List[Dict]:
-        """Apply train/test split based on frame ID modulo strategy."""
+        """Apply train/test split based on sorted frame index within each video."""
         filtered_samples = []
         
+        # Group samples by video_id to process each video separately
+        video_groups = {}
         for sample in samples:
-            frame_id = sample['frame_info']['frame_id']
+            video_id = sample.get('video_id', 'unknown')
+            if video_id not in video_groups:
+                video_groups[video_id] = []
+            video_groups[video_id].append(sample)
+        
+        # Process each video independently
+        for video_id, video_samples in video_groups.items():
+            # Sort frames by frame_id within this video
+            sorted_samples = sorted(video_samples, key=lambda x: x['frame_info']['frame_id'])
             
-            # Apply sampling strategy: (frame_id // 10) % 4, if remainder == 0 -> test, else -> train
-            remainder = (frame_id // self.frame_modulo) % self.split_modulo
-            is_test = (remainder == self.test_remainder)
-            
-            # Include sample based on requested split
-            if (self.split == 'test' and is_test) or (self.split == 'train' and not is_test):
-                filtered_samples.append(sample)
+            # Apply split based on sorted index (not frame_id value)
+            for idx, sample in enumerate(sorted_samples):
+                # New logic: if idx % 4 == 3 -> test, else -> train
+                is_test = (idx % self.split_modulo == 3)
+                
+                # Include sample based on requested split
+                if (self.split == 'test' and is_test) or (self.split == 'train' and not is_test):
+                    filtered_samples.append(sample)
         
         return filtered_samples
     

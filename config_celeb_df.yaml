@@ -12,10 +12,8 @@ dataset:
   
   # Train/Test split configuration
   split_ratio: 0.75  # 75% train, 25% test
-  sampling_strategy: "frame_based"  # Use frame ID for sampling
-  frame_modulo: 10   # Divide frame ID by 10
-  split_modulo: 4    # Then take modulo 4
-  test_remainder: 0  # If remainder equals 0, use for test set
+  sampling_strategy: "sorted_index_based"  # Sort frames within each video by frame_id, then split by index
+  split_modulo: 4    # Take every 4th frame (index 3) for test, rest for train (0,1,2->train, 3->test)
   
   # Data matching strategy
   match_fake_to_mask: true  # Only use fake images that have corresponding masks
