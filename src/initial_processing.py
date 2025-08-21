@@ -127,20 +127,28 @@ class DWTExtractor(nn.Module):
                 # Collect detail coefficients from both levels
                 # Level 1: cH1, cV1, cD1 are at H/2 x W/2
                 # Level 2: cH2, cV2, cD2 are at H/4 x W/4, need to upsample to H/2 x W/2
-                cH2_up = torch.tensor(cH2).unsqueeze(0).unsqueeze(0)
-                cV2_up = torch.tensor(cV2).unsqueeze(0).unsqueeze(0)
-                cD2_up = torch.tensor(cD2).unsqueeze(0).unsqueeze(0)
                 
-                # Upsample level 2 coefficients to match level 1 size
-                target_size = (H//2, W//2)
-                cH2_up = F.interpolate(cH2_up, size=target_size, mode='bilinear', align_corners=False)
-                cV2_up = F.interpolate(cV2_up, size=target_size, mode='bilinear', align_corners=False)
-                cD2_up = F.interpolate(cD2_up, size=target_size, mode='bilinear', align_corners=False)
+                # Convert level 1 coefficients to tensors first to get actual size
+                cH1_tensor = torch.tensor(cH1).float()
+                cV1_tensor = torch.tensor(cV1).float()
+                cD1_tensor = torch.tensor(cD1).float()
+                
+                # Use actual size of level 1 coefficients as target
+                target_size = cH1_tensor.shape  # Actual (H/2, W/2) size
+                
+                # Convert and upsample level 2 coefficients
+                cH2_up = torch.tensor(cH2).float().unsqueeze(0).unsqueeze(0)
+                cV2_up = torch.tensor(cV2).float().unsqueeze(0).unsqueeze(0)
+                cD2_up = torch.tensor(cD2).float().unsqueeze(0).unsqueeze(0)
+                
+                cH2_up = F.interpolate(cH2_up, size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                cV2_up = F.interpolate(cV2_up, size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                cD2_up = F.interpolate(cD2_up, size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
                 
                 # Stack all detail coefficients
                 detail_stack = torch.stack([
-                    torch.tensor(cH1), torch.tensor(cV1), torch.tensor(cD1),
-                    cH2_up.squeeze(0).squeeze(0), cV2_up.squeeze(0).squeeze(0), cD2_up.squeeze(0).squeeze(0)
+                    cH1_tensor, cV1_tensor, cD1_tensor,
+                    cH2_up, cV2_up, cD2_up
                 ], dim=0)  # (6, H/2, W/2)
                 
                 batch_coeffs.append(detail_stack)
