@@ -393,8 +393,16 @@ def get_scheduler(optimizer, mode, config=None):
     
     # Check if optimizer has multiple parameter groups
     if len(optimizer.param_groups) > 1:
-        # Create list of lambda functions (same function for all groups)
-        lr_lambda_list = [lr_lambda] * len(optimizer.param_groups)
+        # Create separate lambda functions for each parameter group
+        def make_lr_lambda():
+            def _lr_lambda(epoch):
+                if epoch < warmup_epochs:
+                    return (epoch + 1) / warmup_epochs
+                else:
+                    return 0.5 * (1 + math.cos(math.pi * (epoch - warmup_epochs) / (num_epochs - warmup_epochs)))
+            return _lr_lambda
+        
+        lr_lambda_list = [make_lr_lambda() for _ in range(len(optimizer.param_groups))]
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_list)
     else:
         # Single parameter group

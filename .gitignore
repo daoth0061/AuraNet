@@ -210,3 +210,4 @@ Project_AuraNet_Implementation_Plan.txt
 test*.py
 test_imports.py
 BUGFIXES_SUMMARY.py
+.vscode
