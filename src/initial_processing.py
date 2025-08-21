@@ -210,8 +210,10 @@ class MSAF(nn.Module):
         """
         B, _, H, W = rgb_image.shape
         
-        # Convert to grayscale
-        grayscale = torch.mean(rgb_image, dim=1, keepdim=True)  # (B, 1, H, W)
+        # Convert to grayscale using standard luminance formula (ITU-R BT.709)
+        # Y = 0.2126*R + 0.7152*G + 0.0722*B
+        r, g, b = rgb_image[:, 0:1, :, :], rgb_image[:, 1:2, :, :], rgb_image[:, 2:3, :, :]
+        grayscale = 0.2126 * r + 0.7152 * g + 0.0722 * b  # (B, 1, H, W)
         
         # Extract SRM features
         srm_features = self.srm_filters(grayscale)  # (B, 10, H, W)

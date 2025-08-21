@@ -108,11 +108,10 @@ def reconstruct_radial_filter(profile_1d, patch_size):
     """
     B, num_bins = profile_1d.shape
     H, W = patch_size
-    device = profile_1d.device
     
     # Create coordinate grid
-    u = torch.arange(H, dtype=torch.float32, device=device).view(-1, 1)
-    v = torch.arange(W, dtype=torch.float32, device=device).view(1, -1)
+    u = torch.arange(H, dtype=torch.float32).view(-1, 1)
+    v = torch.arange(W, dtype=torch.float32).view(1, -1)
     
     # Calculate Chebyshev distance from center
     center_u, center_v = H / 2.0, W / 2.0
@@ -124,7 +123,7 @@ def reconstruct_radial_filter(profile_1d, patch_size):
     d_indices = torch.floor(d_normalized).long().clamp(0, num_bins - 1)
     
     # Create 2D filter by indexing the 1D profile
-    filter_2d = torch.zeros(B, 1, H, W, device=device)
+    filter_2d = torch.zeros(B, 1, H, W)
     for b in range(B):
         filter_2d[b, 0] = profile_1d[b][d_indices]
     
@@ -164,7 +163,6 @@ class HAFT(nn.Module):
             F_out: (B, C, H, W) enhanced feature map
         """
         B, C, H, W = F_in.shape
-        device = F_in.device
         
         # Process each channel separately in frequency domain
         enhanced_channels = []
@@ -246,7 +244,7 @@ class HAFT(nn.Module):
                     level_contexts = hierarchical_contexts[level]
                     
                     # Add level embedding
-                    level_emb = self.level_embedding(torch.tensor(level, device=device))
+                    level_emb = self.level_embedding(torch.tensor(level))
                     enriched_context = level_contexts[:, patch_idx] + level_emb
                     ancestral_contexts.append(enriched_context)
                 
