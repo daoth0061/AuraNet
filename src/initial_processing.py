@@ -52,10 +52,24 @@ class SRMFilters(nn.Module):
         filter_tensors = []
         for f in filters:
             f_array = np.array(f, dtype=np.float32)
-            # Pad smaller filters to 5x5
-            if f_array.shape[0] < 5:
-                pad_size = (5 - f_array.shape[0]) // 2
-                f_array = np.pad(f_array, ((pad_size, pad_size), (pad_size, pad_size)), 'constant')
+            h, w = f_array.shape
+            
+            # Pad to 5x5 if needed
+            if h < 5 or w < 5:
+                # Calculate padding for each side
+                pad_h = 5 - h
+                pad_w = 5 - w
+                
+                # Use asymmetric padding if needed
+                pad_top = pad_h // 2
+                pad_bottom = pad_h - pad_top
+                pad_left = pad_w // 2
+                pad_right = pad_w - pad_left
+                
+                f_array = np.pad(f_array, 
+                    ((pad_top, pad_bottom), (pad_left, pad_right)), 
+                    'constant', constant_values=0)
+            
             filter_tensors.append(torch.tensor(f_array).unsqueeze(0).unsqueeze(0))
         
         # Stack all filters
