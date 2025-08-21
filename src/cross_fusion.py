@@ -246,8 +246,8 @@ class CrossFusionBlock(nn.Module):
         self.freq_norm2 = LayerNorm(dim, data_format="channels_first")
         
         # Feed-forward networks
-        self.spatial_ffn = ConvFFN(dim, dropout=dropout)
-        self.freq_ffn = ConvFFN(dim, dropout=dropout)
+        self.spatial_ffn = ConvFFN(dim)
+        self.freq_ffn = ConvFFN(dim)
         
     def forward(self, spatial_feat, freq_feat):
         """
