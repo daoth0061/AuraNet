@@ -36,11 +36,11 @@ class AuraNet(nn.Module):
     images through both spatial and frequency domains for robust manipulation detection.
     """
     
-    def __init__(self, config_path=None, **kwargs):
+    def __init__(self, config_path=None, config=None, **kwargs):
         super().__init__()
         
         # Load configuration
-        self.config = self._load_config(config_path, **kwargs)
+        self.config = self._load_config(config_path, config, **kwargs)
         
         # Extract configuration parameters
         self.img_size = self.config['img_size']
@@ -63,7 +63,7 @@ class AuraNet(nn.Module):
         # For pre-training
         self._build_pretraining_heads()
         
-    def _load_config(self, config_path=None, **kwargs):
+    def _load_config(self, config_path=None, config=None, **kwargs):
         """Load configuration from file or use defaults with overrides."""
         # Default configuration
         default_config = {
@@ -80,11 +80,31 @@ class AuraNet(nn.Module):
             'num_classes': 2
         }
         
+        # If config dict is passed directly, use it
+        if config is not None:
+            # Flatten the nested config structure
+            flat_config = {}
+            flat_config.update(config)  # Top-level keys
+            
+            # Add model-specific parameters if they exist
+            if 'model' in config:
+                flat_config.update(config['model'])
+            
+            default_config.update(flat_config)
         # Load from YAML file if provided
-        if config_path:
+        elif config_path:
             with open(config_path, 'r') as f:
                 file_config = yaml.safe_load(f)
-            default_config.update(file_config)
+                
+            # Flatten the nested structure
+            flat_config = {}
+            flat_config.update(file_config)  # Top-level keys
+            
+            # Add model-specific parameters if they exist
+            if 'model' in file_config:
+                flat_config.update(file_config['model'])
+            
+            default_config.update(flat_config)
         
         # Override with any provided kwargs
         default_config.update(kwargs)
@@ -287,15 +307,16 @@ class AuraNet(nn.Module):
         return self.config.copy()
 
 
-def create_auranet(config_path=None, **kwargs):
+def create_auranet(config_path=None, config=None, **kwargs):
     """
     Factory function to create AuraNet model.
     
     Args:
         config_path: Path to YAML configuration file
+        config: Configuration dictionary (alternative to config_path)
         **kwargs: Configuration overrides
         
     Returns:
         AuraNet model instance
     """
-    return AuraNet(config_path=config_path, **kwargs)
+    return AuraNet(config_path=config_path, config=config, **kwargs)
