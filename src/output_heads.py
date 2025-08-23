@@ -7,7 +7,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import LayerNorm, Block, CBAMChannelAttention
-from timm.models.layers import trunc_normal_
+try:
+    from timm.layers import trunc_normal_  # New import path
+except ImportError:
+    from timm.models.layers import trunc_normal_  # Fallback to old path
 import yaml
 import os
 

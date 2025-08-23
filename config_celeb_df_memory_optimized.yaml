@@ -86,6 +86,7 @@ logging:
 memory_optimization:
   cpu_offloading: true
   flash_attention: true
+  gradient_checkpointing: true  # Enable gradient checkpointing
   periodic_cache_clearing: true
   sequential_haft_processing: true
 mixed_precision: true

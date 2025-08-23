@@ -5,8 +5,9 @@ Dual-Stream Forensic Network for Face Manipulation Detection
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint
 import yaml
-from initial_processing import MSAF, MBConvDownsample, InitialSpatialStem
+from initial_processing import ArtifactModulatedStem, MSAF, MBConvDownsample, InitialSpatialStem
 from haft import HAFT
 from cross_fusion import CrossFusionBlock
 from output_heads import DSF, ClassificationHead, SegmentationHead
@@ -115,15 +116,9 @@ class AuraNet(nn.Module):
         return default_config
     
     def _build_initial_processing(self):
-        """Build Stage 1: Initial Processing components."""
-        # MSAF for frequency stream initialization
-        self.msaf = MSAF(config=self.config)
-        
-        # MBConv downsample block
-        self.mbconv_downsample = MBConvDownsample(out_channels=self.dims[0], config=self.config)
-        
-        # Initial spatial stem
-        self.spatial_stem = InitialSpatialStem(config=self.config)
+        """Build Stage 1: Artifact-Modulated Stem (AMS)."""
+        # Use the new AMS that combines both spatial and artifact processing
+        self.ams = ArtifactModulatedStem(config=self.config)
         
     def _build_dual_stream_backbone(self):
         """Build Stages 2-5: Dual-Stream Backbone."""
@@ -219,27 +214,46 @@ class AuraNet(nn.Module):
         )
     
     def forward_encoder(self, x):
-        """Forward pass through the dual-stream encoder."""
+        """Forward pass through the dual-stream encoder with optional gradient checkpointing."""
         B, _, H, W = x.shape
         
-        # Stage 1: Initial Processing
-        # Frequency stream initialization
-        freq_features = self.msaf(x)  # (B, 32, H/2, W/2)
-        freq_features = self.mbconv_downsample(freq_features)  # (B, 64, H/4, W/4)
+        # Stage 1: Artifact-Modulated Stem (AMS)
+        # This produces a unified feature map for both streams
+        unified_features = self.ams(x)  # (B, 64, H/4, W/4)
         
-        # Spatial stream initialization  
-        spatial_features = self.spatial_stem(x)  # (B, 64, H/4, W/4)
+        # Initialize both streams with the same unified features
+        spatial_features = unified_features
+        freq_features = unified_features
         
-        # Stages 2-5: Dual-Stream Backbone
+        # Stages 2-5: Dual-Stream Backbone with gradient checkpointing
         for stage_idx in range(self.num_stages):
-            # Process through respective streams
-            spatial_features = self.spatial_stages[stage_idx](spatial_features)
-            freq_features = self.frequency_stages[stage_idx](freq_features)
-            
-            # Cross-fusion
-            spatial_features, freq_features = self.cross_fusion_blocks[stage_idx](
-                spatial_features, freq_features
-            )
+            if self.use_gradient_checkpoint and self.training:
+                # Use gradient checkpointing for memory efficiency
+                def stage_forward(spatial_feat, freq_feat):
+                    # Process through respective streams
+                    spatial_out = self.spatial_stages[stage_idx](spatial_feat)
+                    freq_out = self.frequency_stages[stage_idx](freq_feat)
+                    
+                    # Cross-fusion
+                    spatial_fused, freq_fused = self.cross_fusion_blocks[stage_idx](
+                        spatial_out, freq_out
+                    )
+                    
+                    return spatial_fused, freq_fused
+                
+                # Apply checkpointing
+                spatial_features, freq_features = checkpoint.checkpoint(
+                    stage_forward, spatial_features, freq_features, use_reentrant=False
+                )
+            else:
+                # Standard forward pass
+                spatial_features = self.spatial_stages[stage_idx](spatial_features)
+                freq_features = self.frequency_stages[stage_idx](freq_features)
+                
+                # Cross-fusion
+                spatial_features, freq_features = self.cross_fusion_blocks[stage_idx](
+                    spatial_features, freq_features
+                )
             
             # Downsample for next stage (except last)
             if stage_idx < self.num_stages - 1:

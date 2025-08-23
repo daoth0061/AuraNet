@@ -328,8 +328,11 @@ class MBConvDownsample(nn.Module):
         return out
 
 
-class InitialSpatialStem(nn.Module):
-    """Initial Spatial Stream stem."""
+class ArtifactModulatedStem(nn.Module):
+    """
+    Artifact-Modulated Stem (AMS) - Stage 1
+    Follows the updated design from Project_AuraNet_Implementation_Plan.txt
+    """
     
     def __init__(self, config=None):
         super().__init__()
@@ -340,21 +343,24 @@ class InitialSpatialStem(nn.Module):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
         
-        # Extract parameters from config
-        initial_channels = config['model']['initial_spatial_channels']
-        dims = config['dims']
+        # Extract dimensions
+        dims = config['dims']  # [64, 128, 256, 512]
         
-        self.stem = nn.Sequential(
-            # First conv
-            nn.Conv2d(3, initial_channels, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(initial_channels),
-            nn.GELU(),
-            
-            # Downsample to match MBConv output
-            nn.Conv2d(initial_channels, dims[0], kernel_size=2, stride=2, bias=False),
-            nn.BatchNorm2d(dims[0]),
-            nn.GELU()
+        # 1.1.1 Parallel Feature Extraction
+        
+        # Spatial Path: Standard ConvNeXt-style stem
+        self.spatial_stem = nn.Sequential(
+            nn.Conv2d(3, dims[0], kernel_size=4, stride=4),  # (B, 64, H/4, W/4)
+            LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
+        
+        # Artifact Path: Compact MSAF Variant
+        self.msaf = MSAF(config=config)  # Outputs (B, 32, H/2, W/2)
+        
+        # 1.1.2 Parameter Prediction & Adaptive Modulation
+        
+        # Parameter Head: downsample from H/2 to H/4 and predict gamma, beta
+        self.parameter_head = nn.Conv2d(32, 128, kernel_size=3, stride=2, padding=1)
         
     def forward(self, rgb_image):
         """
@@ -362,6 +368,56 @@ class InitialSpatialStem(nn.Module):
             rgb_image: (B, 3, H, W)
             
         Returns:
-            (B, 64, H/4, W/4)
+            enhanced_features: (B, 64, H/4, W/4) - unified feature map for both streams
+        """
+        # 1.1.1 Parallel Feature Extraction
+        
+        # Spatial Path
+        spatial_features = self.spatial_stem(rgb_image)  # (B, 64, H/4, W/4)
+        
+        # Artifact Path
+        artifact_features = self.msaf(rgb_image)  # (B, 32, H/2, W/2)
+        
+        # 1.1.2 Parameter Prediction & Adaptive Modulation
+        
+        # Predict modulation parameters
+        params = self.parameter_head(artifact_features)  # (B, 128, H/4, W/4)
+        gamma, beta = torch.split(params, 64, dim=1)  # Each (B, 64, H/4, W/4)
+        
+        # Adaptive modulation (AdaIN-style)
+        enhanced_features = gamma * spatial_features + beta
+        
+        return enhanced_features
+
+
+class InitialSpatialStem(nn.Module):
+    """Standard ConvNeXt-style stem following FCMAE pattern."""
+    
+    def __init__(self, config=None):
+        super().__init__()
+        
+        # Load config if provided
+        if config is None:
+            config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        
+        # Extract dimensions - following FCMAE exactly
+        dims = config['dims']  # [64, 128, 256, 512]
+        
+        # Standard ConvNeXt-style stem: single 4x4 conv with stride=4
+        # This matches FCMAE's encoder stem exactly
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, dims[0], kernel_size=4, stride=4),  # 256x256 -> 64x64
+            LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
+        )
+        
+    def forward(self, rgb_image):
+        """
+        Args:
+            rgb_image: (B, 3, H, W) - typically (B, 3, 256, 256)
+            
+        Returns:
+            (B, 64, H/4, W/4) - typically (B, 64, 64, 64)
         """
         return self.stem(rgb_image)

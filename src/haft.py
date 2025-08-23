@@ -235,8 +235,9 @@ class HAFT(nn.Module):
                     start_w, end_w = j * patch_w, (j + 1) * patch_w
                     patch = channel_features[:, :, start_h:end_h, start_w:end_w]
                     
-                    # Apply FFT
-                    patch_fft = torch.fft.fft2(patch.squeeze(1))
+                    # Apply FFT - ensure float32 to avoid ComplexHalf issues
+                    patch_float = patch.squeeze(1).to(torch.float32)
+                    patch_fft = torch.fft.fft2(patch_float)
                     magnitude = torch.abs(patch_fft).unsqueeze(1)
                     # Use atan2 instead of angle to avoid CUDA kernel compilation issues
                     phase = torch.atan2(patch_fft.imag, patch_fft.real).unsqueeze(1)

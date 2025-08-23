@@ -100,17 +100,42 @@ class DeformableCrossAttention(nn.Module):
         # MEMORY OPTIMIZATION: Use memory-efficient attention
         try:
             # Try to use Flash Attention if available (PyTorch 2.0+)
-            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
-                # Use scaled_dot_product_attention for memory efficiency
-                out = F.scaled_dot_product_attention(
-                    q.transpose(1, 2),  # (B, HW, heads, C//heads)
-                    k.transpose(1, 2),  # (B, HW, heads, C//heads) 
-                    v.transpose(1, 2),  # (B, HW, heads, C//heads)
-                    attn_mask=None,
-                    dropout_p=0.0,
-                    is_causal=False
-                )
-                out = out.transpose(1, 2)  # (B, heads, HW, C//heads)
+            try:
+                # New API
+                with torch.nn.attention.sdpa_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                    # Reshape for proper stride: (B, HW, heads, C//heads) -> (B*HW, heads, C//heads)
+                    B, heads, HW, dim = q.shape
+                    q_sdpa = q.transpose(1, 2).contiguous().view(B * HW, heads, dim)  
+                    k_sdpa = k.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
+                    v_sdpa = v.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
+                    
+                    # Use scaled_dot_product_attention for memory efficiency
+                    out_sdpa = F.scaled_dot_product_attention(
+                        q_sdpa, k_sdpa, v_sdpa,
+                        attn_mask=None,
+                        dropout_p=0.0,
+                        is_causal=False
+                    )
+                    # Reshape back: (B*HW, heads, C//heads) -> (B, heads, HW, C//heads)
+                    out = out_sdpa.view(B, HW, heads, dim).transpose(1, 2)
+            except AttributeError:
+                # Fallback to old API
+                with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                    # Reshape for proper stride: (B, HW, heads, C//heads) -> (B*HW, heads, C//heads)
+                    B, heads, HW, dim = q.shape
+                    q_sdpa = q.transpose(1, 2).contiguous().view(B * HW, heads, dim)  
+                    k_sdpa = k.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
+                    v_sdpa = v.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
+                    
+                    # Use scaled_dot_product_attention for memory efficiency
+                    out_sdpa = F.scaled_dot_product_attention(
+                        q_sdpa, k_sdpa, v_sdpa,
+                        attn_mask=None,
+                        dropout_p=0.0,
+                        is_causal=False
+                    )
+                    # Reshape back: (B*HW, heads, C//heads) -> (B, heads, HW, C//heads)
+                    out = out_sdpa.view(B, HW, heads, dim).transpose(1, 2)
         except:
             # Fallback to standard attention computation
             # Compute attention scores
@@ -194,17 +219,32 @@ class StandardCrossAttention(nn.Module):
         # MEMORY OPTIMIZATION: Use memory-efficient attention
         try:
             # Try to use Flash Attention if available (PyTorch 2.0+)
-            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
-                # Use scaled_dot_product_attention for memory efficiency
-                out = F.scaled_dot_product_attention(
-                    q.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                    k.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                    v.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                    attn_mask=None,
-                    dropout_p=0.0,
-                    is_causal=False
-                )
-                out = out.transpose(1, 2)  # (B, heads, H*W, C//heads)
+            try:
+                # New API
+                with torch.nn.attention.sdpa_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                    # Use scaled_dot_product_attention for memory efficiency
+                    out = F.scaled_dot_product_attention(
+                        q.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                        k.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                        v.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                        attn_mask=None,
+                        dropout_p=0.0,
+                        is_causal=False
+                    )
+                    out = out.transpose(1, 2)  # (B, heads, H*W, C//heads)
+            except AttributeError:
+                # Fallback to old API
+                with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                    # Use scaled_dot_product_attention for memory efficiency
+                    out = F.scaled_dot_product_attention(
+                        q.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                        k.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                        v.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                        attn_mask=None,
+                        dropout_p=0.0,
+                        is_causal=False
+                    )
+                    out = out.transpose(1, 2)  # (B, heads, H*W, C//heads)
         except:
             # Fallback to standard attention computation
             # Compute attention

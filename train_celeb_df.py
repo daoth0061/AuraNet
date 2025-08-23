@@ -108,7 +108,12 @@ class DistributedTrainer:
         
         # Enable mixed precision if configured
         if self.config.get('mixed_precision', False):
-            self.scaler = torch.cuda.amp.GradScaler()
+            try:
+                # New API for PyTorch 2.0+
+                self.scaler = torch.amp.GradScaler('cuda')
+            except AttributeError:
+                # Fallback to old API
+                self.scaler = torch.cuda.amp.GradScaler()
         else:
             self.scaler = None
             
@@ -241,9 +246,16 @@ class DistributedTrainer:
             
             if self.scaler is not None:
                 # Mixed precision training
-                with torch.cuda.amp.autocast():
-                    outputs = self.model(batch['image'], mode=self.mode)
-                    loss = self.criterion(outputs, batch)
+                try:
+                    # New API for PyTorch 2.0+
+                    with torch.amp.autocast('cuda'):
+                        outputs = self.model(batch['image'], mode=self.mode)
+                        loss = self.criterion(outputs, batch)
+                except AttributeError:
+                    # Fallback to old API
+                    with torch.cuda.amp.autocast():
+                        outputs = self.model(batch['image'], mode=self.mode)
+                        loss = self.criterion(outputs, batch)
                 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -301,9 +313,16 @@ class DistributedTrainer:
                 
                 # Forward pass
                 if self.scaler is not None:
-                    with torch.cuda.amp.autocast():
-                        outputs = self.model(batch['image'], mode=self.mode)
-                        loss = self.criterion(outputs, batch)
+                    try:
+                        # New API for PyTorch 2.0+
+                        with torch.amp.autocast('cuda'):
+                            outputs = self.model(batch['image'], mode=self.mode)
+                            loss = self.criterion(outputs, batch)
+                    except AttributeError:
+                        # Fallback to old API
+                        with torch.cuda.amp.autocast():
+                            outputs = self.model(batch['image'], mode=self.mode)
+                            loss = self.criterion(outputs, batch)
                 else:
                     outputs = self.model(batch['image'], mode=self.mode)
                     loss = self.criterion(outputs, batch)

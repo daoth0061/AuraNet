@@ -26,6 +26,7 @@ class ImageReconstructionLoss(nn.Module):
         """
         imgs: (N, 3, H, W)
         x: (N, L, patch_size**2 *3)
+        Following FCMAE exactly
         """
         p = self.patch_size
         assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
@@ -42,32 +43,49 @@ class ImageReconstructionLoss(nn.Module):
             pred: (B, patch_size^2 * 3, H, W) predicted patches from decoder
             target: (B, 3, H_full, W_full) original image 
             mask: (B, L) binary mask (1 for removed patches, 0 for kept), optional
+                  where L = (H*W) - number of patches in decoder output
             
         Returns:
             loss: scalar tensor
         """
-        # Convert 4D prediction to 3D following FCMAE forward_loss
+        # Convert 4D prediction to 3D following FCMAE forward_loss exactly
         if len(pred.shape) == 4:
             n, c, _, _ = pred.shape
-            pred = pred.reshape(n, c, -1)  # (B, patch_size^2 * 3, L)
+            pred = pred.reshape(n, c, -1)
             pred = torch.einsum('ncl->nlc', pred)  # (B, L, patch_size^2 * 3)
 
-        # Patchify target image
+        # Patchify target image - CRITICAL: must match decoder spatial resolution
+        # Target must be resized to match decoder output spatial dimensions
+        B, _, target_H, target_W = target.shape
+        _, pred_L, _ = pred.shape
+        
+        # Calculate decoder spatial resolution from number of patches
+        decoder_spatial_dim = int(pred_L ** 0.5)  # sqrt(L) = H = W of decoder
+        expected_target_size = decoder_spatial_dim * self.patch_size
+        
+        # Resize target to match expected size if needed
+        if target_H != expected_target_size or target_W != expected_target_size:
+            target = F.interpolate(target, size=(expected_target_size, expected_target_size), 
+                                 mode='bilinear', align_corners=False)
+        
         target = self.patchify(target)  # (B, L, patch_size^2 * 3)
         
-        # Apply pixel normalization if enabled
+        # Apply pixel normalization if enabled (following FCMAE)
         if self.norm_pix_loss:
             mean = target.mean(dim=-1, keepdim=True)
             var = target.var(dim=-1, keepdim=True)
             target = (target - mean) / (var + 1.e-6)**.5
         
-        # Compute loss
+        # Compute loss (following FCMAE exactly)
         loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+        loss = loss.mean(dim=-1)  # [B, L], mean loss per patch
 
-        # If mask is provided, only compute loss on removed patches
+        # If mask is provided, only compute loss on removed patches (following FCMAE)
         if mask is not None:
-            loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+            # Ensure mask shape matches exactly: must be (B, L) where L matches pred
+            if mask.shape[1] != pred_L:
+                raise ValueError(f"Mask shape {mask.shape} doesn't match pred patches {pred_L}")
+            loss = (loss * mask).sum() / (mask.sum() + 1e-8)  # mean loss on removed patches
         else:
             loss = loss.mean()  # mean loss on all patches
         
@@ -133,20 +151,35 @@ class MaskReconstructionLoss(nn.Module):
         # Convert 4D prediction to 3D following FCMAE pattern
         if len(pred_mask.shape) == 4:
             n, c, _, _ = pred_mask.shape
-            pred_mask = pred_mask.reshape(n, c, -1)  # (B, patch_size^2 * 1, L)
+            pred_mask = pred_mask.reshape(n, c, -1)
             pred_mask = torch.einsum('ncl->nlc', pred_mask)  # (B, L, patch_size^2 * 1)
 
-        # Patchify target mask
+        # Patchify target mask - CRITICAL: must match decoder spatial resolution
+        B, _, target_H, target_W = target_mask.shape
+        _, pred_L, _ = pred_mask.shape
+        
+        # Calculate decoder spatial resolution from number of patches
+        decoder_spatial_dim = int(pred_L ** 0.5)
+        expected_target_size = decoder_spatial_dim * self.patch_size
+        
+        # Resize target to match expected size if needed
+        if target_H != expected_target_size or target_W != expected_target_size:
+            target_mask = F.interpolate(target_mask, size=(expected_target_size, expected_target_size), 
+                                      mode='bilinear', align_corners=False)
+        
         target = self.patchify_mask(target_mask)  # (B, L, patch_size^2 * 1)
         
         # Compute patch-wise L1 loss 
-        l1_loss = (pred_mask - target).abs().mean(dim=-1)  # [N, L], mean loss per patch
+        l1_loss = (pred_mask - target).abs().mean(dim=-1)  # [B, L], mean loss per patch
         
         # If mask is provided, only compute loss on removed patches
         if mask is not None:
-            l1_loss = (l1_loss * mask).sum() / mask.sum()  # mean loss on removed patches
+            # Ensure mask shape matches exactly
+            if mask.shape[1] != pred_L:
+                raise ValueError(f"Mask shape {mask.shape} doesn't match pred patches {pred_L}")
+            l1_loss = (l1_loss * mask).sum() / (mask.sum() + 1e-8)
         else:
-            l1_loss = l1_loss.mean()  # mean loss on all patches
+            l1_loss = l1_loss.mean()
         
         # For SSIM, we need to convert back to full resolution
         # Unpatchify predictions for SSIM calculation
@@ -350,7 +383,47 @@ class CombinedFinetuneLoss(nn.Module):
         return total_loss, loss_dict
 
 
-def create_random_mask(shape, config=None):
+def create_random_mask(encoder_output_shape, mask_ratio, patch_size=32, device=None):
+    """
+    Create random mask for self-supervised pre-training following FCMAE exactly.
+    
+    Args:
+        encoder_output_shape: (B, C, H, W) - shape of encoder output (e.g., (2, 512, 8, 8))
+        mask_ratio: float - ratio of patches to mask
+        patch_size: int - patch size for reconstruction (relates to input image, not encoder)
+        device: torch device
+        
+    Returns:
+        mask: (B, L) binary mask where L = H * W (encoder spatial resolution)
+              0 = keep, 1 = remove (following FCMAE convention)
+    """
+    B, C, H, W = encoder_output_shape
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # CRITICAL: L is the number of spatial positions in encoder output
+    # Each spatial position will reconstruct one patch_size×patch_size region of input
+    # This follows FCMAE's logic but for AuraNet's architecture
+    L = H * W  # e.g., 8*8 = 64 positions/patches
+    len_keep = int(L * (1 - mask_ratio))
+
+    # Generate random mask following FCMAE exactly (lines 125-135)
+    noise = torch.randn(B, L, device=device)
+
+    # sort noise for each sample
+    ids_shuffle = torch.argsort(noise, dim=1)
+    ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+    # generate the binary mask: 0 is keep 1 is remove
+    mask = torch.ones([B, L], device=device)
+    mask[:, :len_keep] = 0
+    # unshuffle to get the binary mask
+    mask = torch.gather(mask, dim=1, index=ids_restore)
+    
+    return mask
+
+
+def create_random_mask_legacy(shape, config=None):
     """
     Create random mask for self-supervised pre-training.
     
