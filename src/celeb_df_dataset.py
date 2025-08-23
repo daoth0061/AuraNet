@@ -284,12 +284,12 @@ class CelebDFDataset(Dataset):
         mask = self._create_random_mask((B, H, W), mask_ratio, patch_size)
         mask = mask.squeeze(0)  # Remove batch dimension
         
-        # Create masked image
+        # Create spatial mask
         spatial_mask = self._expand_mask_to_spatial(mask, H, W, patch_size)
-        masked_image = image_tensor * (1 - spatial_mask)
         
         # Create masked image (apply spatial mask)
-        masked_image = image_tensor * (1 - spatial_mask.unsqueeze(0))  # (3, H, W)
+        # Apply mask correctly to match expected dimensions (3, H, W)
+        masked_image = image_tensor * (1 - spatial_mask)
         
         # Load ground truth mask if available
         if sample['mask_path'] is not None:
@@ -302,6 +302,22 @@ class CelebDFDataset(Dataset):
             # Create dummy mask for real images
             gt_mask = torch.zeros(1, H, W)
         
+        # Ensure image has correct dimensions [C, H, W]
+        if len(masked_image.shape) != 3:
+            print(f"WARNING: masked_image has unexpected shape: {masked_image.shape}. Converting to 3D tensor.")
+            if len(masked_image.shape) == 4 and masked_image.shape[0] == 1:
+                masked_image = masked_image.squeeze(0)
+            elif len(masked_image.shape) == 2:
+                masked_image = masked_image.unsqueeze(0)
+        
+        # Ensure original_image has correct dimensions [C, H, W]
+        if len(image_tensor.shape) != 3:
+            print(f"WARNING: image_tensor has unexpected shape: {image_tensor.shape}. Converting to 3D tensor.")
+            if len(image_tensor.shape) == 4 and image_tensor.shape[0] == 1:
+                image_tensor = image_tensor.squeeze(0)
+            elif len(image_tensor.shape) == 2:
+                image_tensor = image_tensor.unsqueeze(0)
+                
         return {
             'image': masked_image,
             'original_image': image_tensor,
@@ -328,6 +344,14 @@ class CelebDFDataset(Dataset):
         else:
             # Create dummy mask for real images
             mask = torch.zeros(1, H, W)
+        
+        # Ensure image has correct dimensions [C, H, W]
+        if len(image_tensor.shape) != 3:
+            print(f"WARNING: image_tensor has unexpected shape: {image_tensor.shape}. Converting to 3D tensor.")
+            if len(image_tensor.shape) == 4 and image_tensor.shape[0] == 1:
+                image_tensor = image_tensor.squeeze(0)
+            elif len(image_tensor.shape) == 2:
+                image_tensor = image_tensor.unsqueeze(0)
         
         return {
             'image': image_tensor,

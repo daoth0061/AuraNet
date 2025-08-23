@@ -215,6 +215,10 @@ class AuraNet(nn.Module):
     
     def forward_encoder(self, x):
         """Forward pass through the dual-stream encoder with optional gradient checkpointing."""
+        # Ensure x has correct shape (B, C, H, W)
+        if len(x.shape) != 4:
+            raise ValueError(f"Input tensor must have 4 dimensions (B, C, H, W), but got shape {x.shape}")
+        
         B, _, H, W = x.shape
         
         # Stage 1: Artifact-Modulated Stem (AMS)
@@ -273,6 +277,19 @@ class AuraNet(nn.Module):
         Returns:
             Dictionary containing outputs based on mode
         """
+        # Ensure x has correct shape and type
+        if not isinstance(x, torch.Tensor):
+            raise TypeError(f"Input must be a torch.Tensor, but got {type(x)}")
+        
+        # Handle case where batch dimension is missing
+        if len(x.shape) == 3:
+            x = x.unsqueeze(0)  # Add batch dimension
+            print(f"WARNING: Input tensor missing batch dimension. Automatically adding it. New shape: {x.shape}")
+        
+        # Handle case where x is not 4D
+        if len(x.shape) != 4:
+            raise ValueError(f"Input tensor must have 4 dimensions (B, C, H, W), but got shape {x.shape}")
+            
         # Encode features
         spatial_feat, freq_feat = self.forward_encoder(x)
         
