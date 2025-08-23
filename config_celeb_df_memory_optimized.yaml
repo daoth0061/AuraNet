@@ -113,6 +113,11 @@ model:
   msaf_dwt_channels: 12
   msaf_fused_channels: 32
   msaf_srm_channels: 20
+  pretrained:
+    enabled: true
+    spatial_branch: "convnextv2_pico_1k_224_fcmae.pt"
+    freeze_layers: []  # Empty list means no layers are frozen
+    fine_tune_bn_stats: true  # Whether to fine-tune batch norm statistics
   se_reduction: 16
 num_classes: 2
 num_haft_levels:
@@ -127,7 +132,7 @@ training:
   finetune:
     batch_size: 2
     class_loss_weight: 1.0
-    encoder_lr: 1.0e-05
+    encoder_lr: 5.0e-06  # Reduced from 1.0e-05 for pretrained weights
     epochs: 30
     head_lr: 0.001
     min_delta: 0.0001
@@ -135,15 +140,15 @@ training:
     seg_l1_weight: 0.85
     seg_loss_weight: 1.0
     seg_ssim_weight: 0.15
-    warmup_epochs: 3
-    weight_decay: 0.05
+    warmup_epochs: 2  # Reduced from 3 for pretrained weights
+    weight_decay: 0.02  # Reduced from 0.05 for pretrained weights
   gradient_accumulation_steps: 4
   pretrain:
     batch_size: 4
     epochs: 50
     image_loss_weight: 1.0
     l1_weight: 0.85
-    learning_rate: 0.0001
+    learning_rate: 5.0e-05  # Reduced from 0.0001 for pretrained weights
     mask_loss_weight: 1.0
     mask_ratio: 0.6
     min_delta: 0.0001
@@ -151,5 +156,5 @@ training:
     ssim_weight: 0.15
     supcon_loss_weight: 0.5
     supcon_temperature: 0.1
-    warmup_epochs: 5
-    weight_decay: 0.05
+    warmup_epochs: 3  # Reduced from 5 for pretrained weights
+    weight_decay: 0.03  # Reduced from 0.05 for pretrained weights

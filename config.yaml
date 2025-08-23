@@ -64,6 +64,13 @@ model:
   
   # Cross-attention offset scaling
   deformable_offset_scale: 0.1
+  
+  # Pretrained model configuration
+  pretrained:
+    enabled: true
+    spatial_branch: "convnextv2_pico_1k_224_fcmae.pt"
+    freeze_layers: []  # Empty list means no layers are frozen
+    fine_tune_bn_stats: true  # Whether to fine-tune batch norm statistics
 
 # Data augmentation parameters
 data_augmentation:
@@ -86,11 +93,11 @@ training:
   # Pre-training stage
   pretrain:
     batch_size: 32
-    learning_rate: 0.0001  # 1e-4
+    learning_rate: 5.0e-05  # Reduced from 1e-4 for pretrained weights
     epochs: 100
     mask_ratio: 0.6
-    weight_decay: 0.05
-    warmup_epochs: 5
+    weight_decay: 0.03  # Reduced from 0.05 for pretrained weights
+    warmup_epochs: 3  # Reduced from 5 for pretrained weights
     
     # Loss weights
     image_loss_weight: 1.0
@@ -107,11 +114,11 @@ training:
   # Fine-tuning stage
   finetune:
     batch_size: 16
-    encoder_lr: 0.00001  # 1e-5, Small LR for pre-trained encoder
+    encoder_lr: 5.0e-06  # Reduced from 1e-5 for pretrained weights
     head_lr: 0.001       # 1e-3, Larger LR for new heads
     epochs: 50
-    weight_decay: 0.05
-    warmup_epochs: 5
+    weight_decay: 0.02  # Reduced from 0.05 for pretrained weights
+    warmup_epochs: 2  # Reduced from 5 for pretrained weights
     
     # Loss weights
     seg_loss_weight: 1.0
