@@ -6,9 +6,9 @@ dataset:
   name: "celeb_df"
   data_root: "path/to/Celeb_DF_Dataset"  # Update this path
   subfolders:
-    real: "Celeb_DF_Real"
-    fake: "Celeb_DF_Fake" 
-    mask: "Celeb_DF_Mask"
+    real: "celeb_df_real"
+    fake: "celeb_df_fake" 
+    mask: "celeb_df_mask"
   
   # Train/Test split configuration
   split_ratio: 0.75  # 75% train, 25% test
