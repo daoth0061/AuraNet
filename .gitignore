@@ -231,4 +231,6 @@ FIXES_COMPLETE.md
 visual*
 MASK_UTILS_README.md
 LOSS_TUPLE_FIX.md
+IMAGE*.md
+validate*
 

@@ -262,8 +262,11 @@ class CombinedPretrainLoss(nn.Module):
         self.mask_weight = config['training']['pretrain']['mask_loss_weight']
         self.supcon_weight = config['training']['pretrain']['supcon_loss_weight']
         
-        self.image_loss = ImageReconstructionLoss(patch_size=32)
-        self.mask_loss = MaskReconstructionLoss(patch_size=32, config=config)
+        # Get patch size from config or default to 32
+        patch_size = config['model'].get('patch_size', 32)
+        
+        self.image_loss = ImageReconstructionLoss(patch_size=patch_size)
+        self.mask_loss = MaskReconstructionLoss(patch_size=patch_size, config=config)
         self.supcon_loss = losses.SupConLoss(temperature=config['training']['pretrain']['supcon_temperature'])
     
     def forward(self, outputs, targets):
