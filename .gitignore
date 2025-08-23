@@ -215,3 +215,4 @@ Celeb_DF_Dataset/
 logs/
 train_examples.py
 install.py
+visualize_architecture.py
