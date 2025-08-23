@@ -79,7 +79,7 @@ def update_config_for_training(config_path, updates):
     return temp_config_path
 
 
-def run_single_gpu_training(config_path, data_root, mode, gpu_id=0):
+def run_single_gpu_training(config_path, data_root, mode, use_pretrained, pretrained_path, gpu_id=0):
     """Run single GPU training."""
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
@@ -89,7 +89,9 @@ def run_single_gpu_training(config_path, data_root, mode, gpu_id=0):
         '--config', config_path,
         '--mode', mode,
         '--data_root', data_root,
-        '--gpus', '1'
+        '--gpus', '1',
+        '--use_pretrained', use_pretrained,
+        '--pretrained_path', pretrained_path
     ]
     
     print(f"Running single GPU training on GPU {gpu_id}")
@@ -99,14 +101,16 @@ def run_single_gpu_training(config_path, data_root, mode, gpu_id=0):
     return result.returncode
 
 
-def run_multi_gpu_training(config_path, data_root, mode, num_gpus):
+def run_multi_gpu_training(config_path, data_root, mode, use_pretrained, pretrained_path, num_gpus):
     """Run multi-GPU training."""
     cmd = [
         sys.executable, 'train_celeb_df.py',
         '--config', config_path,
         '--mode', mode,
         '--data_root', data_root,
-        '--gpus', str(num_gpus)
+        '--gpus', str(num_gpus),
+        '--use_pretrained', use_pretrained,
+        '--pretrained_path', pretrained_path
     ]
     
     print(f"Running multi-GPU training on {num_gpus} GPUs")
@@ -143,6 +147,10 @@ def main():
                        help='Only analyze dataset without training')
     parser.add_argument('--dry_run', action='store_true',
                        help='Show configuration and exit without training')
+    parser.add_argument('--use_pretrained', type=str, choices=['y', 'n', 'yes', 'no'],
+                       default='n', help='Use ConvNeXtV2 pretrained weights for spatial stream')
+    parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
+                       help='Path to ConvNeXtV2 pretrained weights file')
     
     args = parser.parse_args()
     
@@ -214,6 +222,21 @@ def main():
     # Set data root in config
     config_updates['dataset.data_root'] = args.data_root
     
+    # Process pretrained weights arguments
+    use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
+    config_updates['model.use_pretrained'] = use_pretrained
+    config_updates['model.pretrained_path'] = args.pretrained_path
+    
+    # Handle training mode logic for pretrained weights
+    if args.mode == 'both':
+        # For 'both' mode, only use pretrained weights in pretraining stage
+        config_updates['model.use_pretrained_pretrain'] = use_pretrained
+        config_updates['model.use_pretrained_finetune'] = False
+    else:
+        # For single mode, use pretrained weights if requested
+        config_updates['model.use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
+        config_updates['model.use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
+    
     # Set mask GT directory (default to celeb-df-mask if not provided)
     if args.mask_gt_dir:
         config_updates['evaluation.mask_gt_dir'] = args.mask_gt_dir
@@ -259,9 +282,11 @@ def main():
             # Run pre-training first, then fine-tuning
             print("Starting pre-training phase...")
             if effective_num_gpus > 1:
-                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'pretrain', effective_num_gpus)
+                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'pretrain', 
+                                                args.use_pretrained, args.pretrained_path, effective_num_gpus)
             else:
-                ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'pretrain')
+                ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'pretrain',
+                                                 args.use_pretrained, args.pretrained_path)
             
             if ret_code != 0:
                 print("Pre-training failed!")
@@ -269,15 +294,19 @@ def main():
             
             print("\nStarting fine-tuning phase...")
             if effective_num_gpus > 1:
-                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'finetune', effective_num_gpus)
+                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'finetune',
+                                                args.use_pretrained, args.pretrained_path, effective_num_gpus)
             else:
-                ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'finetune')
+                ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'finetune',
+                                                 args.use_pretrained, args.pretrained_path)
         else:
             # Run single mode
             if effective_num_gpus > 1:
-                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, args.mode, effective_num_gpus)
+                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, args.mode,
+                                                args.use_pretrained, args.pretrained_path, effective_num_gpus)
             else:
-                ret_code = run_single_gpu_training(temp_config_path, args.data_root, args.mode)
+                ret_code = run_single_gpu_training(temp_config_path, args.data_root, args.mode,
+                                                 args.use_pretrained, args.pretrained_path)
         
         return ret_code
     
