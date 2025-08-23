@@ -18,7 +18,8 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 import random
-from typing import Dict, Optional, Tuple
+import shutil
+from typing import Dict, Optional, Tuple, List
 import wandb
 from tensorboardX import SummaryWriter
 
@@ -613,6 +614,66 @@ def main_worker(rank: int, world_size: int, config: Dict, mode: str):
         cleanup_distributed()
 
 
+def setup_kaggle_environment(working_dir: str) -> None:
+    """
+    Setup the Kaggle environment by copying necessary files to the working directory.
+    
+    Args:
+        working_dir: The working directory on Kaggle
+    """
+    print("🚀 Setting up Kaggle environment...")
+    
+    # Create working directory
+    os.makedirs(working_dir, exist_ok=True)
+    
+    # Check if we're in a Kaggle environment
+    if not os.path.exists('/kaggle/input'):
+        print("⚠️ Not running in Kaggle environment")
+        return
+    
+    # Create src directory in the working directory
+    src_dir = os.path.join(working_dir, 'src')
+    os.makedirs(src_dir, exist_ok=True)
+    
+    # Find AuraNet directory in Kaggle input
+    auranet_dirs = []
+    for root, dirs, files in os.walk('/kaggle/input'):
+        if 'src' in dirs and any(f.endswith('.py') for f in files):
+            # This might be the AuraNet directory
+            auranet_dirs.append(root)
+    
+    if not auranet_dirs:
+        print("❌ Could not find AuraNet directory in Kaggle input")
+        return
+    
+    # Use the first found directory
+    source_dir = auranet_dirs[0]
+    print(f"📂 Found AuraNet in: {source_dir}")
+    
+    # Copy Python files
+    for root, _, files in os.walk(source_dir):
+        for file in files:
+            if file.endswith('.py'):
+                src_path = os.path.join(root, file)
+                # Get the relative path from source_dir
+                rel_path = os.path.relpath(src_path, source_dir)
+                dest_path = os.path.join(working_dir, rel_path)
+                
+                # Create destination directory if it doesn't exist
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                
+                # Copy the file
+                shutil.copy2(src_path, dest_path)
+                print(f"📄 Copied: {rel_path}")
+    
+    print("✅ Kaggle environment setup complete!")
+
+
+def is_kaggle_environment() -> bool:
+    """Check if running in a Kaggle environment."""
+    return os.path.exists('/kaggle/input')
+
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description='Train AuraNet on Celeb-DF Dataset')
@@ -628,12 +689,65 @@ def main():
                        default='n', help='Use ConvNeXtV2 pretrained weights for spatial stream')
     parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
                        help='Path to ConvNeXtV2 pretrained weights file')
+    parser.add_argument('--kaggle', action='store_true',
+                       help='Enable Kaggle environment adaptations')
+    parser.add_argument('--kaggle_working_dir', type=str, default='/kaggle/working/AuraNet',
+                       help='Working directory path on Kaggle')
     
     args = parser.parse_args()
     
+    # Kaggle environment setup
+    if args.kaggle or is_kaggle_environment():
+        print("🔧 Setting up Kaggle environment...")
+        
+        # Setup Kaggle environment first
+        setup_kaggle_environment(args.kaggle_working_dir)
+        
+        # Ensure working directory exists
+        os.makedirs(args.kaggle_working_dir, exist_ok=True)
+        
+        # Change working directory to Kaggle working directory
+        os.chdir(args.kaggle_working_dir)
+        print(f"📂 Changed working directory to: {os.getcwd()}")
+        
+        # Fix paths for Kaggle
+        if not os.path.exists(args.config):
+            # Try to resolve config path relative to working directory
+            kaggle_config_path = os.path.join(args.kaggle_working_dir, os.path.basename(args.config))
+            if os.path.exists(kaggle_config_path):
+                args.config = kaggle_config_path
+                print(f"📄 Using config file: {args.config}")
+            else:
+                # Try to find in Kaggle input
+                for root, dirs, files in os.walk('/kaggle/input'):
+                    for file in files:
+                        if file == os.path.basename(args.config):
+                            args.config = os.path.join(root, file)
+                            print(f"📄 Found config file: {args.config}")
+                            break
+        
+        # Adjust pretrained path for Kaggle
+        if not os.path.exists(args.pretrained_path) and 'kaggle/input' in args.pretrained_path:
+            # The path is already a Kaggle path, keep it
+            print(f"🔍 Using pretrained weights from Kaggle: {args.pretrained_path}")
+        elif not os.path.exists(args.pretrained_path):
+            # Try to find in Kaggle input
+            for root, dirs, files in os.walk('/kaggle/input'):
+                for file in files:
+                    if file == os.path.basename(args.pretrained_path):
+                        args.pretrained_path = os.path.join(root, file)
+                        print(f"🔍 Found pretrained weights: {args.pretrained_path}")
+                        break
+    
     # Load configuration
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
+    try:
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"❌ Error: Config file not found: {args.config}")
+        print(f"📂 Current working directory: {os.getcwd()}")
+        print(f"📄 Files in current directory: {os.listdir('.')}")
+        sys.exit(1)
     
     # Update data root in config
     config['dataset']['data_root'] = args.data_root
@@ -689,4 +803,28 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        # Auto-detect Kaggle environment
+        if is_kaggle_environment() and '--kaggle' not in sys.argv:
+            sys.argv.append('--kaggle')
+            print("🔄 Auto-detected Kaggle environment, adding --kaggle flag")
+        
+        main()
+        print("✅ Training completed successfully!")
+    except Exception as e:
+        print(f"❌ Error during training: {str(e)}")
+        if is_kaggle_environment():
+            print("💡 Kaggle troubleshooting tips:")
+            print("  - Check if all source files were copied correctly")
+            print("  - Verify that data paths are correct")
+            print("  - Check GPU availability and memory usage")
+            print("  - Review configuration file settings")
+            
+            # Print current directory structure for debugging
+            print("\n📂 Current directory structure:")
+            for root, dirs, files in os.walk('.', topdown=True, maxdepth=2):
+                for file in files:
+                    if file.endswith('.py'):
+                        print(f"  {os.path.join(root, file)}")
+        
+        raise
