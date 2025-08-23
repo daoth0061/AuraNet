@@ -6,13 +6,20 @@ Implements DSF, ClassificationHead, and SegmentationHead
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys
+import os
+
+# Add src directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
 from utils import LayerNorm, Block, CBAMChannelAttention
 try:
     from timm.layers import trunc_normal_  # New import path
 except ImportError:
     from timm.models.layers import trunc_normal_  # Fallback to old path
 import yaml
-import os
 
 
 class DSF(nn.Module):
