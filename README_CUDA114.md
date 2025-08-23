@@ -99,7 +99,7 @@ python -c "import torch; print(torch.cuda.get_device_name() if torch.cuda.is_ava
 1. Update dataset path in `config_celeb_df.yaml`:
    ```yaml
    dataset:
-     data_root: "path/to/your/Celeb_DF_Dataset"  # Update this
+     data_root: "path/to/your/celeb_df_dataset"  # Update this
    ```
 
 2. Test the setup:

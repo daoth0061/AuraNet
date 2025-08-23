@@ -4,7 +4,7 @@
 # Dataset Configuration
 dataset:
   name: "celeb_df"
-  data_root: "path/to/Celeb_DF_Dataset"  # Update this path
+  data_root: "path/to/celeb_df_dataset"  # Update this path
   subfolders:
     real: "celeb_df_real"
     fake: "celeb_df_fake" 
@@ -169,7 +169,7 @@ evaluation:
   save_predictions: true
   visualize_results: true
   metrics: ["accuracy", "precision", "recall", "f1", "auc", "ap"]
-  mask_gt_dir: "Celeb_DF_Mask"  # Path to ground truth masks for mask evaluation (relative to data_root)
+  mask_gt_dir: "celeb_df_mask"  # Path to ground truth masks for mask evaluation (relative to data_root)
   detailed_eval_freq: 1  # Run detailed evaluation every N epochs (1 = every epoch)
   
 # Checkpointing and logging

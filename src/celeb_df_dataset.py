@@ -26,7 +26,7 @@ class CelebDFDataset(Dataset):
                  config: Optional[Dict] = None, transform=None):
         """
         Args:
-            data_root: Root directory containing Celeb_DF_Real, Celeb_DF_Fake, Celeb_DF_Mask
+            data_root: Root directory containing celeb_df_real, celeb_df_fake, celeb_df_mask
             mode: 'pretrain' or 'finetune'
             split: 'train' or 'test'
             config: Configuration dictionary
@@ -437,7 +437,7 @@ def analyze_celeb_df_dataset(data_root: str) -> Dict:
     }
     
     # Analyze real images
-    real_dir = data_root / 'Celeb_DF_Real'
+    real_dir = data_root / 'celeb_df_real'
     if real_dir.exists():
         for video_dir in real_dir.iterdir():
             if video_dir.is_dir():
@@ -445,7 +445,7 @@ def analyze_celeb_df_dataset(data_root: str) -> Dict:
                 stats['real_images'] += len(list(video_dir.glob('*.jpg')))
     
     # Analyze fake images
-    fake_dir = data_root / 'Celeb_DF_Fake'
+    fake_dir = data_root / 'celeb_df_fake'
     if fake_dir.exists():
         for video_dir in fake_dir.iterdir():
             if video_dir.is_dir():
@@ -453,7 +453,7 @@ def analyze_celeb_df_dataset(data_root: str) -> Dict:
                 stats['fake_images'] += len(list(video_dir.glob('*.jpg')))
     
     # Analyze mask images
-    mask_dir = data_root / 'Celeb_DF_Mask'
+    mask_dir = data_root / 'celeb_df_mask'
     mask_files = set()
     if mask_dir.exists():
         for video_dir in mask_dir.iterdir():

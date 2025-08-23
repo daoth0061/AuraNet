@@ -211,7 +211,7 @@ test*.py
 test_imports.py
 BUGFIXES_SUMMARY.py
 .vscode
-Celeb_DF_Dataset/
+celeb_df_dataset/
 logs/
 train_examples.py
 install.py

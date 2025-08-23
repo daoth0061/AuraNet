@@ -6,22 +6,22 @@ This document provides comprehensive instructions for training AuraNet on the Ce
 
 The Celeb-DF dataset should have the following structure:
 ```
-Celeb_DF_Dataset/
-├── Celeb_DF_Real/
+celeb_df_dataset/
+├── celeb_df_real/
 │   ├── video_id_1/
 │   │   ├── cropped_face_1_frame_100.jpg
 │   │   ├── cropped_face_1_frame_110.jpg
 │   │   └── ...
 │   ├── video_id_2/
 │   └── ...
-├── Celeb_DF_Fake/
+├── celeb_df_fake/
 │   ├── video_id_1/
 │   │   ├── cropped_face_1_frame_100.jpg
 │   │   ├── cropped_face_1_frame_110.jpg
 │   │   └── ...
 │   ├── video_id_2/
 │   └── ...
-└── Celeb_DF_Mask/
+└── celeb_df_mask/
     ├── video_id_1/
     │   ├── cropped_face_1_frame_100.jpg
     │   ├── cropped_face_1_frame_110.jpg
@@ -45,22 +45,22 @@ The implemented sampling strategy follows your specifications:
 ### 1. Analyze Dataset
 First, analyze your dataset structure and statistics:
 ```bash
-python analyze_celeb_df.py --data_root /path/to/Celeb_DF_Dataset
+python analyze_celeb_df.py --data_root /path/to/celeb_df_dataset
 ```
 
 ### 2. Single GPU Training (Fine-tuning only)
 ```bash
-python launch_training.py --data_root /path/to/Celeb_DF_Dataset --mode finetune --gpus 1
+python launch_training.py --data_root /path/to/celeb_df_dataset --mode finetune --gpus 1
 ```
 
 ### 3. Multi-GPU Training (Fine-tuning only)
 ```bash
-python launch_training.py --data_root /path/to/Celeb_DF_Dataset --mode finetune --gpus 4
+python launch_training.py --data_root /path/to/celeb_df_dataset --mode finetune --gpus 4
 ```
 
 ### 4. Complete Training Pipeline (Pre-training + Fine-tuning)
 ```bash
-python launch_training.py --data_root /path/to/Celeb_DF_Dataset --mode both --gpus 4
+python launch_training.py --data_root /path/to/celeb_df_dataset --mode both --gpus 4
 ```
 
 ## Detailed Training Options
@@ -75,7 +75,7 @@ python launch_training.py --data_root /path/to/Celeb_DF_Dataset --mode both --gp
 #### Fine-tuning Only (Recommended)
 ```bash
 python launch_training.py \
-    --data_root /path/to/Celeb_DF_Dataset \
+    --data_root /path/to/celeb_df_dataset \
     --mode finetune \
     --gpus 4 \
     --batch_size 8 \
@@ -85,7 +85,7 @@ python launch_training.py \
 #### Pre-training + Fine-tuning
 ```bash
 python launch_training.py \
-    --data_root /path/to/Celeb_DF_Dataset \
+    --data_root /path/to/celeb_df_dataset \
     --mode both \
     --gpus 4 \
     --batch_size 16
@@ -94,7 +94,7 @@ python launch_training.py \
 #### Pre-training Only
 ```bash
 python launch_training.py \
-    --data_root /path/to/Celeb_DF_Dataset \
+    --data_root /path/to/celeb_df_dataset \
     --mode pretrain \
     --gpus 4 \
     --batch_size 16 \
@@ -124,7 +124,7 @@ python launch_training.py --data_root /path/to/data --mode finetune --gpu_ids "0
 #### Custom Hyperparameters
 ```bash
 python launch_training.py \
-    --data_root /path/to/Celeb_DF_Dataset \
+    --data_root /path/to/celeb_df_dataset \
     --mode finetune \
     --batch_size 16 \
     --learning_rate 1e-4 \
@@ -134,7 +134,7 @@ python launch_training.py \
 #### Resume Training
 ```bash
 python launch_training.py \
-    --data_root /path/to/Celeb_DF_Dataset \
+    --data_root /path/to/celeb_df_dataset \
     --mode finetune \
     --resume_from checkpoints/celeb_df/best_model.pth
 ```
@@ -142,7 +142,7 @@ python launch_training.py \
 #### Dry Run (Test Configuration)
 ```bash
 python launch_training.py \
-    --data_root /path/to/Celeb_DF_Dataset \
+    --data_root /path/to/celeb_df_dataset \
     --mode finetune \
     --dry_run
 ```
@@ -154,7 +154,7 @@ python launch_training.py \
 ```yaml
 # Dataset Configuration
 dataset:
-  data_root: "path/to/Celeb_DF_Dataset"
+  data_root: "path/to/celeb_df_dataset"
   split_ratio: 0.75  # 75% train, 25% test
   frame_modulo: 10   # Frame ID sampling parameter
   test_remainder: 4  # Test set condition
@@ -311,7 +311,7 @@ pip install ninja  # For faster compilation
 #!/bin/bash
 
 # Set dataset path
-DATA_ROOT="/path/to/Celeb_DF_Dataset"
+DATA_ROOT="/path/to/celeb_df_dataset"
 
 # Analyze dataset first
 echo "Analyzing dataset..."
