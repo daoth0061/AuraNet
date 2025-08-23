@@ -213,3 +213,5 @@ BUGFIXES_SUMMARY.py
 .vscode
 Celeb_DF_Dataset/
 logs/
+train_examples.py
+install.py
