@@ -18,6 +18,11 @@ import logging
 from typing import Dict, List, Tuple, Optional
 import re
 
+# Import mask utilities
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+from mask_utils import expand_mask_to_spatial, create_random_mask
+
 
 class CelebDFDataset(Dataset):
     """Dataset class for Celeb-DF with specific sampling strategy."""
@@ -273,19 +278,15 @@ class CelebDFDataset(Dataset):
         
         # Create random mask at patch level
         mask_ratio = self.config['training']['pretrain']['mask_ratio']
-        block_size = self.config['model']['block_size']
-        patch_mask = self._create_random_mask((B, H, W), mask_ratio, block_size)
-        patch_mask = patch_mask.squeeze(0)  # Remove batch dimension: (L,)
+        patch_size = self.config['model'].get('patch_size', 32)  # Use patch_size consistently
         
-        # Create spatial mask for masking the image (for visualization)
-        mask_h = H // block_size
-        mask_w = W // block_size
-        spatial_mask = patch_mask.view(mask_h, mask_w)
-        spatial_mask = torch.nn.functional.interpolate(
-            spatial_mask.unsqueeze(0).unsqueeze(0), 
-            size=(H, W), 
-            mode='nearest'
-        ).squeeze()  # (H, W)
+        # Create mask at patch level
+        mask = self._create_random_mask((B, H, W), mask_ratio, patch_size)
+        mask = mask.squeeze(0)  # Remove batch dimension
+        
+        # Create masked image
+        spatial_mask = self._expand_mask_to_spatial(mask, H, W, patch_size)
+        masked_image = image_tensor * (1 - spatial_mask)
         
         # Create masked image (apply spatial mask)
         masked_image = image_tensor * (1 - spatial_mask.unsqueeze(0))  # (3, H, W)
@@ -304,8 +305,8 @@ class CelebDFDataset(Dataset):
         return {
             'image': masked_image,
             'original_image': image_tensor,
-            'mask': patch_mask,  # (L,) - patch-level mask for loss computation
-            'spatial_mask': spatial_mask.unsqueeze(0),  # (1, H, W) - spatial mask for visualization
+            'mask': mask,  # (L,) - patch-level mask for loss computation
+            'spatial_mask': spatial_mask,  # (1, H, W) - spatial mask for visualization
             'ground_truth_mask': gt_mask,
             'label': torch.tensor(sample['label'], dtype=torch.long),
             'video_id': sample['video_id'],
@@ -337,37 +338,19 @@ class CelebDFDataset(Dataset):
             'image_path': sample['image_path']
         }
     
-    def _create_random_mask(self, shape: Tuple, mask_ratio: float, block_size: int):
+    def _create_random_mask(self, shape: Tuple, mask_ratio: float, patch_size: int):
         """Create random mask for pre-training."""
         B, H, W = shape
         
-        # Create block-wise mask at patch level (following FCMAE)
-        patch_size = block_size  # Use block_size as patch_size
-        mask_h = H // patch_size
-        mask_w = W // patch_size
-        
-        # Total number of patches
-        L = mask_h * mask_w
-        
-        # Create mask at patch level (B, L) - this is what the loss expects
-        num_masked = int(mask_ratio * L)
-        
-        # Create patch-level mask
-        patch_mask = torch.zeros(B, L)
-        for b in range(B):
-            # Randomly select patches to mask
-            masked_indices = torch.randperm(L)[:num_masked]
-            patch_mask[b, masked_indices] = 1.0
-        
-        # Also create spatial mask for visualization (optional)
-        spatial_mask = patch_mask.view(B, mask_h, mask_w)
-        spatial_mask = torch.nn.functional.interpolate(
-            spatial_mask.unsqueeze(1), 
-            size=(H, W), 
-            mode='nearest'
-        )
+        # Use the imported function from mask_utils
+        patch_mask, _ = create_random_mask(shape, mask_ratio, patch_size)
         
         return patch_mask  # Return (B, L) for loss computation
+        
+    def _expand_mask_to_spatial(self, patch_mask, H, W, patch_size):
+        """Convert patch-level mask to spatial mask."""
+        # Use the imported function from mask_utils
+        return expand_mask_to_spatial(patch_mask, H, W, patch_size)
 
 
 def create_celeb_df_dataloaders(data_root: str, mode: str = 'finetune', 

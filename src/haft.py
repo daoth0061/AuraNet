@@ -321,7 +321,7 @@ class HAFT(nn.Module):
                 original_patch = channel_features[:, :, start_h:end_h, start_w:end_w]
                 
                 # Apply frequency domain filtering - ensure float32 for complex operations
-                original_patch_float32 = original_patch.float()  # Convert to float32 for FFT
+                original_patch_float32 = original_patch.to(torch.float32)  # Convert to float32 for FFT
                 patch_fft = torch.fft.fft2(original_patch_float32.squeeze(1))
                 magnitude = torch.abs(patch_fft)
                 # Use atan2 instead of angle to avoid CUDA kernel compilation issues

@@ -11,6 +11,12 @@ import json
 import numpy as np
 import cv2
 import yaml
+import sys
+from pathlib import Path
+
+# Import mask utilities
+sys.path.append(str(Path(__file__).parent.parent))
+from mask_utils import create_random_mask, apply_mask_to_image
 
 
 class AuraNetDataset(Dataset):
@@ -45,7 +51,7 @@ class AuraNetDataset(Dataset):
         # Extract parameters from config
         self.img_size = tuple(self.config['img_size'])
         self.mask_ratio = self.config['training']['pretrain']['mask_ratio']
-        self.block_size = self.config['model']['block_size']
+        self.patch_size = self.config['model'].get('patch_size', 32)  # Use patch_size consistently
         
         # Load annotations
         with open(annotation_file, 'r') as f:
@@ -109,10 +115,9 @@ class AuraNetDataset(Dataset):
         # Create random mask
         B, H, W = 1, self.img_size[0], self.img_size[1]
         mask = self._create_random_mask((B, H, W), self.mask_ratio)
-        mask = mask.squeeze(0)  # Remove batch dimension
         
-        # Create masked image
-        masked_image = original_image * (1 - mask)
+        # Create masked image using apply_mask_to_image
+        masked_image = apply_mask_to_image(original_image.unsqueeze(0), mask, 'spatial').squeeze(0)
         
         # Create ground truth mask (for simplicity, we'll use a random binary mask)
         # In practice, this might be derived from manipulation annotations
@@ -125,7 +130,7 @@ class AuraNetDataset(Dataset):
         sample = {
             'image': masked_image,
             'original_image': original_image,
-            'mask': mask,
+            'mask': mask.squeeze(0),  # Remove batch dimension
             'ground_truth_mask': gt_mask,
             'label': torch.tensor(label, dtype=torch.long)
         }
@@ -163,23 +168,13 @@ class AuraNetDataset(Dataset):
     def _create_random_mask(self, shape, mask_ratio):
         """Create random mask for pre-training."""
         B, H, W = shape
+        patch_size = self.patch_size
         
-        # Create block-wise mask for more realistic masking
-        block_size = self.block_size
-        mask_h = H // block_size
-        mask_w = W // block_size
+        # Use the imported function from mask_utils
+        patch_mask, spatial_mask = create_random_mask(shape, mask_ratio, patch_size)
         
-        # Create mask at block level
-        block_mask = torch.rand(B, mask_h, mask_w) < mask_ratio
-        
-        # Upsample to full resolution
-        mask = torch.nn.functional.interpolate(
-            block_mask.float().unsqueeze(1), 
-            size=(H, W), 
-            mode='nearest'
-        )
-        
-        return mask
+        # Return the spatial mask directly (already has the right shape)
+        return spatial_mask
 
 
 def create_data_loaders(train_data_root, val_data_root, train_annotations, val_annotations,

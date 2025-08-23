@@ -65,8 +65,9 @@ model:
   am_softmax_margin: 0.35
   am_softmax_scale: 30.0
   
-  # Block masking parameters
-  block_size: 16  # For random masking
+  # Masking parameters
+  patch_size: 32  # Patch size for FCMAE masking (encoder/decoder)
+  block_size: 16  # Block size for random masking (visualization)
   
   # Initial processing channels
   msaf_srm_channels: 20
