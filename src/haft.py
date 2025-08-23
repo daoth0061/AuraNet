@@ -165,16 +165,45 @@ class HAFT(nn.Module):
         """
         B, C, H, W = F_in.shape
         
-        # Process each channel separately in frequency domain
+        # MEMORY OPTIMIZATION: Sequential channel processing to reduce memory usage
+        # Instead of processing all channels at once, process them sequentially
         enhanced_channels = []
         
-        for c in range(C):
-            channel_features = F_in[:, c:c+1, :, :]  # (B, 1, H, W)
-            enhanced_channel = self._process_channel(channel_features)
-            enhanced_channels.append(enhanced_channel)
+        # Process channels in smaller groups to reduce peak memory usage
+        channel_group_size = min(8, C)  # Process 8 channels at a time max
         
-        # Concatenate enhanced channels
+        for start_c in range(0, C, channel_group_size):
+            end_c = min(start_c + channel_group_size, C)
+            
+            # Extract channel group
+            channel_group = F_in[:, start_c:end_c, :, :]  # (B, group_size, H, W)
+            
+            # Process each channel in the group
+            group_enhanced = []
+            for c in range(channel_group.size(1)):
+                channel_features = channel_group[:, c:c+1, :, :]  # (B, 1, H, W)
+                enhanced_channel = self._process_channel(channel_features)
+                group_enhanced.append(enhanced_channel)
+                
+                # Clear intermediate variables to save memory
+                del channel_features
+            
+            # Concatenate group results
+            group_result = torch.cat(group_enhanced, dim=1)
+            enhanced_channels.append(group_result)
+            
+            # Clear group variables to save memory
+            del channel_group, group_enhanced, group_result
+            
+            # Clear CUDA cache periodically
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
+        # Concatenate all enhanced channels
         F_out = torch.cat(enhanced_channels, dim=1)  # (B, C, H, W)
+        
+        # Clear intermediate list
+        del enhanced_channels
         
         # Output projection
         F_out = self.output_proj(F_out)

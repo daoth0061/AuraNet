@@ -221,3 +221,4 @@ convnextv2_sparse.py
 convnextv2.py
 fcmae.py
 utils.py
+optimize_memory.py

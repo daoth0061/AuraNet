@@ -1,0 +1,154 @@
+checkpoint:
+  resume_from: null
+  save_best: true
+  save_dir: checkpoints/celeb_df
+  save_freq: 5
+compile_model: false
+context_vector_dim: 64
+data_augmentation:
+  brightness: 0.1
+  contrast: 0.1
+  horizontal_flip_prob: 0.5
+  hue: 0.05
+  mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  rotation_degrees: 10
+  saturation: 0.1
+  std:
+  - 0.229
+  - 0.224
+  - 0.225
+data_loading:
+  drop_last: true
+  num_workers: 2
+  persistent_workers: true
+  pin_memory: false
+  prefetch_factor: 1
+dataset:
+  data_root: path/to/celeb_df_dataset
+  match_fake_to_mask: true
+  name: celeb_df
+  sampling_strategy: sorted_index_based
+  split_modulo: 4
+  split_ratio: 0.75
+  subfolders:
+    fake: celeb_df_fake
+    mask: celeb_df_mask
+    real: celeb_df_real
+decoder_depth: 1
+decoder_embed_dim: 342
+depths:
+- 2
+- 2
+- 6
+- 2
+deterministic: false
+device: cuda
+dims:
+- 64
+- 128
+- 256
+- 512
+distributed:
+  backend: nccl
+  enabled: true
+  init_method: env://
+  local_rank: null
+  rank: null
+  world_size: null
+dsf_dim: 512
+evaluation:
+  batch_size: 16
+  detailed_eval_freq: 1
+  mask_gt_dir: celeb_df_mask
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - auc
+  - ap
+  save_predictions: true
+  visualize_results: true
+img_size:
+- 256
+- 256
+logging:
+  log_dir: logs/celeb_df
+  log_freq: 100
+  tensorboard: true
+  wandb:
+    enabled: false
+    entity: null
+    project: auranet-celeb-df
+memory_optimization:
+  cpu_offloading: true
+  flash_attention: true
+  periodic_cache_clearing: true
+  sequential_haft_processing: true
+mixed_precision: true
+model:
+  am_softmax_margin: 0.35
+  am_softmax_scale: 30.0
+  attention_dropout: 0.0
+  attention_heads: 8
+  block_size: 16
+  cbam_reduction: 16
+  classification_dropout: 0.15
+  contrastive_hidden_dim: 512
+  contrastive_projection_dim: 128
+  cross_fusion_dropout: 0.0
+  deformable_offset_scale: 0.1
+  ffn_hidden_ratio: 4
+  haft_encoder_channels:
+  - 16
+  - 32
+  haft_pooling_size: 4
+  initial_spatial_channels: 32
+  mbconv_expand_ratio: 4
+  mlp_hidden_dim: 128
+  msaf_dwt_channels: 12
+  msaf_fused_channels: 32
+  msaf_srm_channels: 20
+  se_reduction: 16
+num_classes: 2
+num_haft_levels:
+- 2
+- 2
+- 2
+- 1
+num_radial_bins: 16
+num_stages: 4
+seed: 42
+training:
+  finetune:
+    batch_size: 2
+    class_loss_weight: 1.0
+    encoder_lr: 1.0e-05
+    epochs: 30
+    head_lr: 0.001
+    min_delta: 0.0001
+    patience: 8
+    seg_l1_weight: 0.85
+    seg_loss_weight: 1.0
+    seg_ssim_weight: 0.15
+    warmup_epochs: 3
+    weight_decay: 0.05
+  gradient_accumulation_steps: 4
+  pretrain:
+    batch_size: 4
+    epochs: 50
+    image_loss_weight: 1.0
+    l1_weight: 0.85
+    learning_rate: 0.0001
+    mask_loss_weight: 1.0
+    mask_ratio: 0.6
+    min_delta: 0.0001
+    patience: 10
+    ssim_weight: 0.15
+    supcon_loss_weight: 0.5
+    supcon_temperature: 0.1
+    warmup_epochs: 5
+    weight_decay: 0.05

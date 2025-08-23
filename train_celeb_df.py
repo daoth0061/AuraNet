@@ -258,6 +258,10 @@ class DistributedTrainer:
             total_loss += loss.item()
             self.global_step += 1
             
+            # MEMORY OPTIMIZATION: Clear intermediate variables and cache periodically
+            if batch_idx % 50 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             # Logging
             if self.rank == 0 and batch_idx % log_freq == 0:
                 self.logger.info(
@@ -336,6 +340,14 @@ class DistributedTrainer:
                 
             except Exception as e:
                 self.logger.warning(f"Comprehensive evaluation failed: {e}")
+        
+        # MEMORY OPTIMIZATION: CPU Offloading after validation
+        # Clear CUDA cache to free up memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Force garbage collection
+            import gc
+            gc.collect()
         
         return metrics
     

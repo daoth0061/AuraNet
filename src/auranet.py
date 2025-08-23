@@ -55,6 +55,9 @@ class AuraNet(nn.Module):
         self.decoder_depth = self.config['decoder_depth']
         self.num_classes = self.config['num_classes']
         
+        # MEMORY OPTIMIZATION: Enable gradient checkpointing
+        self.use_gradient_checkpoint = self.config.get('memory_optimization', {}).get('gradient_checkpointing', False)
+        
         # Build model components
         self._build_initial_processing()
         self._build_dual_stream_backbone()

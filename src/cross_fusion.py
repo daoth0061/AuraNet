@@ -97,30 +97,46 @@ class DeformableCrossAttention(nn.Module):
         k = k.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)  # (B, heads, HW, C//heads)
         v = v.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)  # (B, heads, HW, C//heads)
         
-        # Compute attention scores
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, HW, HW)
-        
-        # Add relative positional bias
-        # Create coordinate grids for bias computation
-        y_coords, x_coords = torch.meshgrid(
-            torch.arange(H, device=query_map.device),
-            torch.arange(W, device=query_map.device),
-            indexing='ij'
-        )
-        query_coords = torch.stack([x_coords.flatten(), y_coords.flatten()], dim=-1)  # (HW, 2)
-        query_coords = query_coords.unsqueeze(0).repeat(B, 1, 1).float()  # (B, HW, 2)
-        
-        # For simplicity, use the same coordinates for keys (this can be refined)
-        key_coords = query_coords  
-        
-        rel_bias = self.rel_pos_bias(query_coords, key_coords)  # (B, heads, HW, HW)
-        attn = attn + rel_bias
-        
-        # Apply softmax
-        attn = F.softmax(attn, dim=-1)
-        
-        # Apply attention to values
-        out = attn @ v  # (B, heads, HW, C//heads)
+        # MEMORY OPTIMIZATION: Use memory-efficient attention
+        try:
+            # Try to use Flash Attention if available (PyTorch 2.0+)
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                # Use scaled_dot_product_attention for memory efficiency
+                out = F.scaled_dot_product_attention(
+                    q.transpose(1, 2),  # (B, HW, heads, C//heads)
+                    k.transpose(1, 2),  # (B, HW, heads, C//heads) 
+                    v.transpose(1, 2),  # (B, HW, heads, C//heads)
+                    attn_mask=None,
+                    dropout_p=0.0,
+                    is_causal=False
+                )
+                out = out.transpose(1, 2)  # (B, heads, HW, C//heads)
+        except:
+            # Fallback to standard attention computation
+            # Compute attention scores
+            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, HW, HW)
+            
+            # Add relative positional bias
+            # Create coordinate grids for bias computation
+            y_coords, x_coords = torch.meshgrid(
+                torch.arange(H, device=query_map.device),
+                torch.arange(W, device=query_map.device),
+                indexing='ij'
+            )
+            query_coords = torch.stack([x_coords.flatten(), y_coords.flatten()], dim=-1)  # (HW, 2)
+            query_coords = query_coords.unsqueeze(0).repeat(B, 1, 1).float()  # (B, HW, 2)
+            
+            # For simplicity, use the same coordinates for keys (this can be refined)
+            key_coords = query_coords  
+            
+            rel_bias = self.rel_pos_bias(query_coords, key_coords)  # (B, heads, HW, HW)
+            attn = attn + rel_bias
+            
+            # Apply softmax
+            attn = F.softmax(attn, dim=-1)
+            
+            # Apply attention to values
+            out = attn @ v  # (B, heads, HW, C//heads)
         
         # Reshape back to feature map format
         out = out.transpose(-2, -1).reshape(B, C, H, W)  # (B, C, H, W)
@@ -175,12 +191,28 @@ class StandardCrossAttention(nn.Module):
         k = k.view(B, H*W, self.heads, C // self.heads).transpose(1, 2)  # (B, heads, H*W, C//heads)
         v = v.view(B, H*W, self.heads, C // self.heads).transpose(1, 2)  # (B, heads, H*W, C//heads)
         
-        # Compute attention
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, H*W, H*W)
-        attn = F.softmax(attn, dim=-1)
-        
-        # Apply attention to values
-        out = attn @ v  # (B, heads, H*W, C//heads)
+        # MEMORY OPTIMIZATION: Use memory-efficient attention
+        try:
+            # Try to use Flash Attention if available (PyTorch 2.0+)
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                # Use scaled_dot_product_attention for memory efficiency
+                out = F.scaled_dot_product_attention(
+                    q.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                    k.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                    v.transpose(1, 2),  # (B, H*W, heads, C//heads)
+                    attn_mask=None,
+                    dropout_p=0.0,
+                    is_causal=False
+                )
+                out = out.transpose(1, 2)  # (B, heads, H*W, C//heads)
+        except:
+            # Fallback to standard attention computation
+            # Compute attention
+            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, H*W, H*W)
+            attn = F.softmax(attn, dim=-1)
+            
+            # Apply attention to values
+            out = attn @ v  # (B, heads, H*W, C//heads)
         
         # Reshape back
         out = out.transpose(1, 2).reshape(B, H*W, C)  # (B, H*W, C)

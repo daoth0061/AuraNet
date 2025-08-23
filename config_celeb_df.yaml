@@ -155,12 +155,12 @@ training:
     patience: 8
     min_delta: 0.0001  # 1e-4
 
-# Data loading parameters
+# Data loading parameters - MEMORY OPTIMIZED
 data_loading:
-  num_workers: 4
-  pin_memory: true
-  drop_last: true  # For training
-  prefetch_factor: 2
+  num_workers: 2        # Reduce from 4 to save memory
+  pin_memory: false     # Disable to save GPU memory
+  drop_last: true       # For training
+  prefetch_factor: 1    # Reduce from 2 to save memory  
   persistent_workers: true
   
 # Evaluation parameters  
