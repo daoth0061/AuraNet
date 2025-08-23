@@ -2,7 +2,7 @@
 # Global Configuration Parameters
 
 # Image processing
-img_size: [256, 256]  # [H, W]
+img_size: [128, 128]  # [H, W]
 
 # Backbone architecture
 num_stages: 4  # Stages 2, 3, 4, 5 of the main backbone

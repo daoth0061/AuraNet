@@ -73,8 +73,8 @@ evaluation:
   save_predictions: true
   visualize_results: true
 img_size:
-- 256
-- 256
+- 128
+- 128
 logging:
   log_dir: logs/celeb_df
   log_freq: 100

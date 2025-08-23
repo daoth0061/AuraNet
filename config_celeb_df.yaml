@@ -19,7 +19,7 @@ dataset:
   match_fake_to_mask: true  # Only use fake images that have corresponding masks
 
 # Image processing
-img_size: [256, 256]  # [H, W]
+img_size: [128, 128]  # [H, W]
 
 # Backbone architecture (same as base config)
 num_stages: 4  # Stages 2, 3, 4, 5 of the main backbone
