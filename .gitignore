@@ -216,3 +216,4 @@ logs/
 train_examples.py
 install.py
 visualize_architecture.py
+auranet_architecture.png
