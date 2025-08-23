@@ -12,14 +12,18 @@ import torch.distributed as dist
 import yaml
 import time
 import sys
+import logging
 from pathlib import Path
 from datetime import datetime
+
+# Add src directory to path
+sys.path.append(str(Path(__file__).parent / 'src'))
 
 # Import logging utilities
 from src.logging_utils import setup_logging, get_logger
 
-# Set up logging with file output
-logger = setup_logging(log_dir='logs', level=logging.INFO)
+# Get logger instance
+logger = get_logger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='AuraNet Optimized Training')
@@ -222,6 +226,9 @@ def optimize_config(config, args):
 def main():
     # Parse arguments
     args = parse_args()
+    
+    # Set up logging
+    setup_logging(log_dir='logs', level=logging.INFO)
     
     # Check for Kaggle environment
     if args.kaggle or is_kaggle_environment():

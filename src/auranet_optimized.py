@@ -7,10 +7,17 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 import yaml
+import os
+import sys
+import importlib.util
+
+# Add src directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
 from initial_processing import ArtifactModulatedStem, MSAF, MBConvDownsample, InitialSpatialStem
 from utils import Block, LayerNorm
-import os
-import importlib.util
 from logging_utils import get_logger
 
 # Set up logging
@@ -261,22 +268,23 @@ class AuraNetOptimized(nn.Module):
         
         # Image decoder for reconstructing masked patches
         self.image_decoder = ImageDecoder(
-            in_dim=final_dim,
+            input_dim=final_dim,  # Changed from in_dim to input_dim to match the expected parameter
             decoder_embed_dim=self.decoder_embed_dim,
             decoder_depth=self.decoder_depth
         )
         
         # Mask decoder for predicting binary manipulation masks
         self.mask_decoder = MaskDecoder(
-            in_dim=final_dim,
+            input_dim=final_dim,  # Changed from in_dim to input_dim
             decoder_embed_dim=self.decoder_embed_dim,
             decoder_depth=self.decoder_depth
         )
         
         # Contrastive learning projection head
         self.contrastive_head = ContrastiveProjectionHead(
-            in_dim=final_dim,
-            config=self.config
+            input_dim=final_dim,  # Changed from in_dim to input_dim
+            projection_dim=self.config.get('contrastive_dim', 128),  # Use get() to avoid KeyError
+            hidden_dim=self.config.get('contrastive_hidden_dim', 512)  # Use get() to avoid KeyError
         )
         
     def _process_stage(self, stage_idx, spatial_features, freq_features):
@@ -405,7 +413,7 @@ class AuraNetOptimized(nn.Module):
         
         # Load the checkpoint
         logger.info(f"Loading pretrained weights from {pretrained_path}")
-        checkpoint = torch.load(pretrained_path, map_location='cpu')
+        checkpoint = torch.load(pretrained_path, map_location='cpu', weights_only=False)
         
         # If it's a full model checkpoint, extract just the model state
         if 'model_state_dict' in checkpoint:
@@ -481,8 +489,10 @@ def create_optimized_auranet(config_path=None, config=None, use_pretrained=False
         device = kwargs.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
         model = model.to(device)
         try:
-            model = torch.compile(model)
-            logger.info("Model compiled successfully")
+            # Disable torch.compile for now due to compatibility issues
+            logger.warning("torch.compile() disabled due to CUDA compatibility issues")
+            # model = torch.compile(model)
+            # logger.info("Model compiled successfully")
         except Exception as e:
             logger.error(f"Failed to compile model: {e}")
     

@@ -16,10 +16,10 @@ Key Components:
 
 Example Usage:
     ```python
-    from auranet import create_auranet, AuraNetTrainer
+    from auranet_optimized import create_optimized_auranet, AuraNetTrainer
     
     # Create model
-    model = create_auranet(config_path='config.yaml')
+    model = create_optimized_auranet(config_path='config.yaml')
     
     # Initialize trainer
     trainer = AuraNetTrainer(config_path='config.yaml', save_dir='./checkpoints')
@@ -29,7 +29,15 @@ Example Usage:
     ```
 """
 
-from auranet import create_auranet, AuraNet
+import sys
+import os
+
+# Add the src directory to the Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+from auranet_optimized import create_optimized_auranet, AuraNetOptimized
 from train import AuraNetTrainer
 from data_loader import AuraNetDataset, create_data_loaders
 from training import (
@@ -44,8 +52,8 @@ __author__ = "AuraNet Team"
 __email__ = "auranet@example.com"
 
 __all__ = [
-    'create_auranet',
-    'AuraNet', 
+    'create_optimized_auranet',
+    'AuraNetOptimized', 
     'AuraNetTrainer',
     'AuraNetDataset',
     'create_data_loaders',

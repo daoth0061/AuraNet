@@ -8,6 +8,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pywt
 import numpy as np
+import sys
+import os
+
+# Add src directory to path to import from correct utils
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
 from utils import LayerNorm, SEBlock, CBAMChannelAttention, CBAMSpatialAttention
 import yaml
 import os

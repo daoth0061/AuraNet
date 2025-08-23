@@ -6,10 +6,17 @@ Implements Deformable and Standard Cross-Attention mechanisms with parallel proc
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import LayerNorm, create_grid_like, normalize_grid, ContinuousPositionalBias
 import yaml
 import os
+import sys
 from functools import partial
+
+# Add src directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+from utils import LayerNorm, create_grid_like, normalize_grid, ContinuousPositionalBias
 
 
 class ParallelDeformableCrossAttention(nn.Module):
