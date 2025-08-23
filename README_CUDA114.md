@@ -10,8 +10,12 @@ This guide helps you set up AuraNet on systems with CUDA 11.4.
 conda env create -f environment_cuda114.yml
 conda activate auranet-cuda114
 
-# Verify installation
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+# Install PyTorch and remaining dependencies
+python setup_cuda114.py
+
+# Or manually:
+pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 --extra-index-url https://download.pytorch.org/whl/cu118
+pip install -r requirements_cuda114.txt
 ```
 
 ### Option 2: Using pip with virtual environment
