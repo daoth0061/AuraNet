@@ -19,7 +19,7 @@ dataset:
   match_fake_to_mask: true  # Only use fake images that have corresponding masks
 
 # Image processing
-img_size: [128, 128]  # [H, W]
+img_size: [64, 64]  # [H, W]
 
 # Backbone architecture (same as base config)
 num_stages: 4  # Stages 2, 3, 4, 5 of the main backbone
@@ -121,7 +121,7 @@ training:
   pretrain:
     batch_size: 16    # Per GPU batch size
     learning_rate: 5.0e-05  # Reduced from 1e-4 for pretrained weights
-    epochs: 50        # Reduced for Celeb-DF
+    epochs: 30        # Reduced for Celeb-DF
     mask_ratio: 0.6
     weight_decay: 0.03  # Reduced from 0.05 for pretrained weights
     warmup_epochs: 3  # Reduced from 5 for pretrained weights
@@ -147,7 +147,7 @@ training:
     batch_size: 8     # Per GPU batch size (smaller for fine-tuning)
     encoder_lr: 5.0e-06  # Reduced from 1e-5 for pretrained weights
     head_lr: 0.001       # 1e-3, Larger LR for new heads
-    epochs: 30        # Reduced for Celeb-DF
+    epochs: 50        # Reduced for Celeb-DF
     weight_decay: 0.02  # Reduced from 0.05 for pretrained weights
     warmup_epochs: 2  # Reduced from 3 for pretrained weights
     

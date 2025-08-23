@@ -53,6 +53,28 @@ pip install -r requirements.txt
 python -m src.demo
 ```
 
+### Logging System
+
+AuraNet includes a comprehensive logging system that captures both console output and writes logs to files:
+
+```python
+from src.logging_utils import setup_logging, get_logger
+
+# Setup logging for the application
+setup_logging(log_dir='./logs')
+
+# Get a logger for a specific module
+logger = get_logger(__name__)
+logger.info("Starting AuraNet training...")
+logger.debug("Loading configuration from config.yaml")
+```
+
+Log files are stored in the `logs` directory with timestamps and can be used for:
+- Debugging training issues
+- Monitoring performance metrics
+- Tracking experiment results
+- Analyzing model behavior over time
+
 ### Basic Usage
 
 ```python
@@ -101,6 +123,24 @@ python -m src.train \
     --save_dir ./checkpoints \
     --pretrained_checkpoint ./checkpoints/pretrain_best.pth
 ```
+
+### Optimized Training
+
+For performance-optimized training with automatic logging:
+
+```bash
+python train_optimized.py \
+    --config config_celeb_df_memory_optimized.yaml \
+    --mode pretrain \
+    --data_root /path/to/data \
+    --gpus 2 \
+    --use_pretrained yes \
+    --pretrained_path /path/to/convnextv2_pico_1k_224_fcmae.pt \
+    --memory_optimization \
+    --enable_optimized_modules
+```
+
+All training progress and metrics are automatically logged to both console and timestamped log files in the `logs` directory.
 
 ## 📁 Data Format
 
@@ -288,6 +328,15 @@ Each level contributes to adaptive filter learning through hierarchical context 
   - Global attention mechanism
   - Reduced computational complexity
 
+### Logging System
+The project includes a comprehensive logging system for tracking training progress and debugging:
+- File-based logging with timestamped log files
+- Console output for real-time monitoring
+- Different verbosity levels for various components
+- Integration with training, evaluation, and inference modules
+
+Detailed documentation can be found in [LOGGING_SYSTEM.md](LOGGING_SYSTEM.md).
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -306,6 +355,20 @@ Each level contributes to adaptive filter learning through hierarchical context 
    - Check data quality and labels
    - Verify pre-processing pipeline
    - Consider longer pre-training
+
+### Log Analysis Tools
+
+The project includes tools for analyzing training logs and debugging issues:
+
+```bash
+# Analyze metrics from log files
+python analyze_logs.py --log_file logs/auranet_20240821_163505.log --metrics accuracy,loss --plot
+
+# Analyze memory usage patterns
+python analyze_memory.py --log_file logs/auranet_20240821_163505.log --plot --detailed
+```
+
+See [LOGS_USAGE_GUIDE.md](LOGS_USAGE_GUIDE.md) for detailed instructions on log analysis.
 
 ### Dependencies
 - Python >= 3.8

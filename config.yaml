@@ -2,7 +2,7 @@
 # Global Configuration Parameters
 
 # Image processing
-img_size: [128, 128]  # [H, W]
+img_size: [64, 64]  # [H, W]
 
 # Backbone architecture
 num_stages: 4  # Stages 2, 3, 4, 5 of the main backbone
@@ -94,7 +94,7 @@ training:
   pretrain:
     batch_size: 32
     learning_rate: 5.0e-05  # Reduced from 1e-4 for pretrained weights
-    epochs: 100
+    epochs: 30
     mask_ratio: 0.6
     weight_decay: 0.03  # Reduced from 0.05 for pretrained weights
     warmup_epochs: 3  # Reduced from 5 for pretrained weights

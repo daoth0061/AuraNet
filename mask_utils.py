@@ -144,7 +144,7 @@ def apply_mask_to_image(
 
 if __name__ == "__main__":
     # Example usage
-    img_size = (128, 128)
+    img_size = (64, 64)
     patch_size = 32
     mask_ratio = 0.75
     

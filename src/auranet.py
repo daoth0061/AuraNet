@@ -71,7 +71,7 @@ class AuraNet(nn.Module):
         """Load configuration from file or use defaults with overrides."""
         # Default configuration
         default_config = {
-            'img_size': [256, 256],
+            'img_size': [64, 64],
             'num_stages': 4,
             'depths': [2, 2, 6, 2],
             'dims': [64, 128, 256, 512],

@@ -33,25 +33,51 @@ chmod +x /kaggle/input/auranet/kaggle_train.sh
 ```python
 import os
 import sys
+import logging
+from datetime import datetime
 
-# Thêm đường dẫn mã nguồn vào Python path
+# Thiết lập đường dẫn mã nguồn vào Python path
 sys.path.append('/kaggle/working/AuraNet')
 sys.path.append('/kaggle/working/AuraNet/src')
+
+# Tạo thư mục logs
+log_dir = '/kaggle/working/AuraNet/logs'
+os.makedirs(log_dir, exist_ok=True)
+
+# Thiết lập logging
+log_file = f"auranet_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_path = os.path.join(log_dir, log_file)
+
+# Cấu hình logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_path),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("AuraNet training started")
 
 # Sao chép file từ input đến working directory
 !mkdir -p /kaggle/working/AuraNet
 !cp -r /kaggle/input/auranet/* /kaggle/working/AuraNet/
 
 # Chạy training
-!python /kaggle/working/AuraNet/train_celeb_df.py \
+!python /kaggle/working/AuraNet/train_optimized.py \
     --config /kaggle/working/AuraNet/config_celeb_df_memory_optimized.yaml \
     --mode pretrain \
     --data_root /kaggle/input \
     --gpus 2 \
     --use_pretrained yes \
     --pretrained_path /kaggle/input/convnextv2-pico/pytorch/default/1/convnextv2_pico_1k_224_fcmae.pt \
+    --memory_optimization \
+    --enable_optimized_modules \
     --kaggle \
-    --kaggle_working_dir /kaggle/working/AuraNet
+    --kaggle_working_dir /kaggle/working/AuraNet 2>&1 | tee -a {log_path}
+
+logger.info("Training completed")
 ```
 
 ## Cấu hình thông số

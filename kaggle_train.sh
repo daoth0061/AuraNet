@@ -6,6 +6,7 @@ WORKING_DIR="/kaggle/working/AuraNet"
 DATA_ROOT="/kaggle/input"
 CONFIG_FILE="/kaggle/working/AuraNet/config_celeb_df_memory_optimized.yaml"
 PRETRAINED_PATH="/kaggle/input/convnextv2-pico/pytorch/default/1/convnextv2_pico_1k_224_fcmae.pt"
+LOG_DIR="/kaggle/working/AuraNet/logs"
 
 # Training parameters
 MODE="pretrain"  # Options: pretrain, finetune, both
@@ -23,10 +24,12 @@ echo "Mode: $MODE"
 echo "GPUs: $NUM_GPUS"
 echo "Use pretrained weights: $USE_PRETRAINED"
 echo "Pretrained path: $PRETRAINED_PATH"
+echo "Logs directory: $LOG_DIR"
 echo "========================================"
 
-# Create working directory
+# Create directories
 mkdir -p $WORKING_DIR
+mkdir -p $LOG_DIR
 
 # Copy configuration file
 cp "/kaggle/input/auranet-config/config_celeb_df_memory_optimized.yaml" $CONFIG_FILE

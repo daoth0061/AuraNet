@@ -29,6 +29,12 @@ Hệ thống evaluation mới của AuraNet cung cấp đánh giá chi tiết ch
 - **SSIM**: Structural Similarity Index
 - **Statistics**: Mean, Std, Min, Max cho mỗi metric
 
+### 4. Logging System Integration
+- Tất cả kết quả evaluation được log vào file 
+- Log details với timestamp và module source
+- Dễ dàng phân tích metrics sau khi training
+- Export kết quả evaluation dưới dạng JSON
+
 ## Usage
 
 ### 1. Training với Evaluation tích hợp
@@ -49,6 +55,7 @@ evaluation:
   batch_size: 16
   mask_gt_dir: "/kaggle/input/ff-mask/"  # Path to ground truth masks
   detailed_eval_freq: 1  # Run detailed evaluation every N epochs
+  log_dir: "logs/evaluation"  # Directory to save evaluation logs
 ```
 
 ### 3. Test Evaluation System
@@ -72,6 +79,11 @@ src/
 config_celeb_df.yaml         # Updated config với evaluation settings
 launch_training.py           # Updated launcher với mask_gt_dir support
 test_evaluation.py           # Test script cho evaluation system
+logs/
+├── auranet_20240821_163505.log  # Main log file
+└── evaluation/                 # Evaluation log files
+    ├── eval_20240821_163505.log
+    └── eval_metrics_20240821_163505.json
 ```
 
 ## Evaluation Output Example
@@ -107,7 +119,7 @@ Mask Reconstruction Metrics:
 2. **Comprehensive Metrics**: Tất cả metrics quan trọng cho cả 2 tasks
 3. **Flexible GT Loading**: Tự động tìm và load ground truth masks
 4. **Memory Efficient**: Batch-wise evaluation để tiết kiệm memory
-5. **Detailed Logging**: Logs chi tiết với formatting đẹp
+5. **Detailed Logging**: Logs chi tiết với formatting đẹp và lưu vào file
 6. **Error Handling**: Robust error handling cho missing data
 
 ## Ground Truth Mask Directory Structure
@@ -133,8 +145,8 @@ TrainingEvaluator được tích hợp sẵn vào `DistributedTrainer`:
 
 1. Khởi tạo trong `__init__`
 2. Chạy evaluation trong `validate_epoch`
-3. Log metrics sau mỗi epoch
-4. Lưu metrics vào tensorboard/wandb
+3. Log metrics sau mỗi epoch với logging system
+4. Lưu metrics vào file và tensorboard/wandb
 
 ## Performance Considerations
 
@@ -143,8 +155,42 @@ TrainingEvaluator được tích hợp sẵn vào `DistributedTrainer`:
 - Lazy loading của ground truth masks
 - Efficient tensor operations với PyTorch
 
+## Logging Integration
+
+Tất cả kết quả evaluation được ghi vào file log:
+
+```python
+from src.logging_utils import get_logger
+
+class TrainingEvaluator:
+    def __init__(self, config, device):
+        self.logger = get_logger(__name__)
+        self.config = config
+        self.device = device
+        
+    def evaluate(self, model, dataloader):
+        self.logger.info("Starting evaluation...")
+        # Evaluation logic
+        metrics = self._compute_metrics(predictions, targets)
+        
+        # Log detailed metrics
+        self.logger.info(f"VALIDATION Metrics - Epoch {epoch}:")
+        self.logger.info("="*50)
+        
+        for metric_name, value in metrics.items():
+            self.logger.info(f"  {metric_name}: {value:.4f}")
+            
+        self.logger.info("="*50)
+        
+        # Export metrics to JSON
+        self._export_metrics_to_json(metrics, epoch)
+        
+        return metrics
+```
+
 ## Troubleshooting
 
 1. **Missing GT masks**: Hệ thống sẽ skip mask evaluation nếu không tìm thấy GT
 2. **Memory issues**: Giảm batch_size trong config
 3. **Slow evaluation**: Giảm `detailed_eval_freq` trong config
+4. **Missing logs**: Kiểm tra thư mục logs và quyền ghi file

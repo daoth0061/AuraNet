@@ -3,7 +3,7 @@ checkpoint:
   save_best: true
   save_dir: checkpoints/celeb_df
   save_freq: 5
-compile_model: false
+compile_model: true
 context_vector_dim: 64
 data_augmentation:
   brightness: 0.1
@@ -22,10 +22,10 @@ data_augmentation:
   - 0.225
 data_loading:
   drop_last: true
-  num_workers: 2
+  num_workers: 4
   persistent_workers: true
-  pin_memory: false
-  prefetch_factor: 1
+  pin_memory: true
+  prefetch_factor: 2
 dataset:
   data_root: path/to/celeb-df-dataset
   match_fake_to_mask: true
@@ -73,8 +73,8 @@ evaluation:
   save_predictions: true
   visualize_results: true
 img_size:
-- 128
-- 128
+- 64
+- 64
 logging:
   log_dir: logs/celeb_df
   log_freq: 100
@@ -89,6 +89,10 @@ memory_optimization:
   gradient_checkpointing: true  # Enable gradient checkpointing
   periodic_cache_clearing: true
   sequential_haft_processing: true
+  enable_channels_last: true    # Use NHWC memory format
+  enable_cudnn_autotuner: true  # Enable CuDNN autotuner
+  use_optimized_modules: true   # Use optimized HAFT and CrossFusion implementations
+  parallel_processing: true     # Enable parallel processing where possible
 mixed_precision: true
 model:
   am_softmax_margin: 0.35
@@ -130,7 +134,7 @@ num_stages: 4
 seed: 42
 training:
   finetune:
-    batch_size: 2
+    batch_size: 4
     class_loss_weight: 1.0
     encoder_lr: 5.0e-06  # Reduced from 1.0e-05 for pretrained weights
     epochs: 30
@@ -142,9 +146,9 @@ training:
     seg_ssim_weight: 0.15
     warmup_epochs: 2  # Reduced from 3 for pretrained weights
     weight_decay: 0.02  # Reduced from 0.05 for pretrained weights
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 2
   pretrain:
-    batch_size: 4
+    batch_size: 8
     epochs: 50
     image_loss_weight: 1.0
     l1_weight: 0.85
