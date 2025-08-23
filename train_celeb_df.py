@@ -267,12 +267,24 @@ class DistributedTrainer:
                     # New API for PyTorch 2.0+
                     with torch.amp.autocast('cuda'):
                         outputs = self.model(batch['image'], mode=self.mode)
-                        loss = self.criterion(outputs, batch)
+                        loss_tuple = self.criterion(outputs, batch)
+                        # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                        if isinstance(loss_tuple, tuple):
+                            loss, loss_dict = loss_tuple
+                        else:
+                            loss = loss_tuple
+                            loss_dict = None
                 except AttributeError:
                     # Fallback to old API
                     with torch.cuda.amp.autocast():
                         outputs = self.model(batch['image'], mode=self.mode)
-                        loss = self.criterion(outputs, batch)
+                        loss_tuple = self.criterion(outputs, batch)
+                        # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                        if isinstance(loss_tuple, tuple):
+                            loss, loss_dict = loss_tuple
+                        else:
+                            loss = loss_tuple
+                            loss_dict = None
                 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -280,7 +292,13 @@ class DistributedTrainer:
             else:
                 # Regular training
                 outputs = self.model(batch['image'], mode=self.mode)
-                loss = self.criterion(outputs, batch)
+                loss_tuple = self.criterion(outputs, batch)
+                # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                if isinstance(loss_tuple, tuple):
+                    loss, loss_dict = loss_tuple
+                else:
+                    loss = loss_tuple
+                    loss_dict = None
                 loss.backward()
                 self.optimizer.step()
             
@@ -301,6 +319,14 @@ class DistributedTrainer:
                 if self.writer is not None:
                     self.writer.add_scalar('Train/Loss', loss.item(), self.global_step)
                     self.writer.add_scalar('Train/LR', self.optimizer.param_groups[0]['lr'], self.global_step)
+                    
+                    # Log individual losses if available
+                    if loss_dict is not None:
+                        for loss_name, loss_value in loss_dict.items():
+                            if torch.is_tensor(loss_value):
+                                self.writer.add_scalar(f'Train/{loss_name}', loss_value.item(), self.global_step)
+                            else:
+                                self.writer.add_scalar(f'Train/{loss_name}', loss_value, self.global_step)
                 
                 if self.config['logging']['wandb']['enabled']:
                     wandb.log({
@@ -334,17 +360,45 @@ class DistributedTrainer:
                         # New API for PyTorch 2.0+
                         with torch.amp.autocast('cuda'):
                             outputs = self.model(batch['image'], mode=self.mode)
-                            loss = self.criterion(outputs, batch)
+                            loss_tuple = self.criterion(outputs, batch)
+                            # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                            if isinstance(loss_tuple, tuple):
+                                loss, loss_dict = loss_tuple
+                            else:
+                                loss = loss_tuple
+                                loss_dict = None
                     except AttributeError:
                         # Fallback to old API
                         with torch.cuda.amp.autocast():
                             outputs = self.model(batch['image'], mode=self.mode)
-                            loss = self.criterion(outputs, batch)
+                            loss_tuple = self.criterion(outputs, batch)
+                            # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                            if isinstance(loss_tuple, tuple):
+                                loss, loss_dict = loss_tuple
+                            else:
+                                loss = loss_tuple
+                                loss_dict = None
                 else:
                     outputs = self.model(batch['image'], mode=self.mode)
-                    loss = self.criterion(outputs, batch)
+                    loss_tuple = self.criterion(outputs, batch)
+                    # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                    if isinstance(loss_tuple, tuple):
+                        loss, loss_dict = loss_tuple
+                    else:
+                        loss = loss_tuple
+                        loss_dict = None
                 
                 total_loss += loss.item()
+                
+                # If loss_dict is available, collect individual losses for averaging
+                if loss_dict is not None:
+                    for loss_name, loss_value in loss_dict.items():
+                        if loss_name not in metrics:
+                            metrics[loss_name] = []
+                        if torch.is_tensor(loss_value):
+                            metrics[loss_name].append(loss_value.item())
+                        else:
+                            metrics[loss_name].append(loss_value)
                 
                 # Collect predictions for basic metrics
                 if 'classification_logits' in outputs:
@@ -354,6 +408,11 @@ class DistributedTrainer:
         
         avg_loss = total_loss / num_batches
         metrics = {'val_loss': avg_loss}
+        
+        # Calculate average for individual losses
+        for loss_name, loss_values in list(metrics.items()):
+            if isinstance(loss_values, list):
+                metrics[loss_name] = sum(loss_values) / len(loss_values)
         
         # Basic accuracy for backward compatibility
         if all_predictions and self.rank == 0:
