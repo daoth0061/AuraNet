@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import LayerNorm, Block, CBAMChannelAttention
+from timm.models.layers import trunc_normal_
 import yaml
 import os
 
@@ -121,8 +122,18 @@ class SegmentationHead(nn.Module):
             Block(decoder_embed_dim) for _ in range(decoder_depth)
         ])
         
+        # Upsampling layers to restore original resolution
+        # From 8x8 -> 16x16 -> 32x32 -> 64x64 -> 128x128 -> 256x256
+        self.upsample_layers = nn.ModuleList([
+            nn.ConvTranspose2d(decoder_embed_dim, decoder_embed_dim // 2, kernel_size=4, stride=2, padding=1),  # 8x8 -> 16x16
+            nn.ConvTranspose2d(decoder_embed_dim // 2, decoder_embed_dim // 4, kernel_size=4, stride=2, padding=1),  # 16x16 -> 32x32
+            nn.ConvTranspose2d(decoder_embed_dim // 4, decoder_embed_dim // 8, kernel_size=4, stride=2, padding=1),  # 32x32 -> 64x64
+            nn.ConvTranspose2d(decoder_embed_dim // 8, decoder_embed_dim // 16, kernel_size=4, stride=2, padding=1),  # 64x64 -> 128x128
+            nn.ConvTranspose2d(decoder_embed_dim // 16, decoder_embed_dim // 32, kernel_size=4, stride=2, padding=1),  # 128x128 -> 256x256
+        ])
+        
         # Final prediction layer
-        self.pred = nn.Conv2d(decoder_embed_dim, 1, kernel_size=1)
+        self.pred = nn.Conv2d(decoder_embed_dim // 32, 1, kernel_size=1)
         
         # Final activation
         self.sigmoid = nn.Sigmoid()
@@ -130,20 +141,25 @@ class SegmentationHead(nn.Module):
     def forward(self, fused_features):
         """
         Args:
-            fused_features: (B, input_dim, H, W)
+            fused_features: (B, input_dim, H, W) - typically (B, 512, 8, 8)
             
         Returns:
-            mask: (B, 1, H, W) grayscale segmentation mask
+            mask: (B, 1, 256, 256) - full resolution grayscale segmentation mask
         """
         # Project to decoder dimension
-        x = self.proj(fused_features)  # (B, decoder_embed_dim, H, W)
+        x = self.proj(fused_features)  # (B, decoder_embed_dim, 8, 8)
         
         # Apply decoder blocks
         for block in self.decoder_blocks:
             x = block(x)
         
+        # Progressive upsampling with activation
+        for upsample_layer in self.upsample_layers:
+            x = upsample_layer(x)
+            x = F.gelu(x)
+        
         # Final prediction
-        x = self.pred(x)  # (B, 1, H, W)
+        x = self.pred(x)  # (B, 1, 256, 256)
         
         # Apply sigmoid activation
         mask = self.sigmoid(x)
@@ -153,81 +169,135 @@ class SegmentationHead(nn.Module):
 
 # Additional heads for pre-training stage
 class ImageDecoder(nn.Module):
-    """Image decoder for self-supervised pre-training."""
+    """Image decoder for self-supervised pre-training following FCMAE pattern."""
     
-    def __init__(self, input_dim, output_channels=3, decoder_embed_dim=342, decoder_depth=1):
+    def __init__(self, input_dim, output_channels=3, decoder_embed_dim=512, decoder_depth=1, patch_size=32):
         super().__init__()
+        self.patch_size = patch_size
         
-        # Project input channels to decoder embedding dimension
+        # Following FCMAE implementation exactly
+        # proj: input_dim -> decoder_embed_dim
         self.proj = nn.Conv2d(input_dim, decoder_embed_dim, kernel_size=1)
         
-        # Stack of ConvNeXt V2 blocks
-        self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim) for _ in range(decoder_depth)
-        ])
+        # mask token for reconstruction
+        self.mask_token = nn.Parameter(torch.zeros(1, decoder_embed_dim, 1, 1))
         
-        # Final prediction layer for RGB reconstruction
-        self.pred = nn.Conv2d(decoder_embed_dim, output_channels, kernel_size=1)
+        # decoder: Stack of ConvNeXt V2 blocks 
+        decoder = [Block(decoder_embed_dim, drop_path=0.) for _ in range(decoder_depth)]
+        self.decoder = nn.Sequential(*decoder)
         
-    def forward(self, spatial_features):
+        # pred: decoder_embed_dim -> patch_size^2 * output_channels (following FCMAE exactly)
+        self.pred = nn.Conv2d(decoder_embed_dim, patch_size ** 2 * output_channels, kernel_size=1)
+        
+        # Initialize weights following FCMAE pattern
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, m):
+        """Initialize weights following FCMAE pattern."""
+        if isinstance(m, nn.Conv2d):
+            w = m.weight.data
+            trunc_normal_(w.view([w.shape[0], -1]))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        if isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        # Initialize mask token
+        if hasattr(self, 'mask_token'):
+            torch.nn.init.normal_(self.mask_token, std=.02)
+        
+    def forward(self, spatial_features, mask=None):
         """
         Args:
-            spatial_features: (B, input_dim, H, W)
+            spatial_features: (B, input_dim, H, W) - typically (B, 512, 8, 8)
+            mask: (B, H*W) - optional mask for reconstruction
             
         Returns:
-            reconstructed: (B, output_channels, H, W)
+            pred: (B, patch_size^2 * output_channels, H, W) - patch-wise predictions
         """
-        # Project to decoder dimension
+        # Project to decoder dimension (following FCMAE forward_decoder)
         x = self.proj(spatial_features)
         
-        # Apply decoder blocks
-        for block in self.decoder_blocks:
-            x = block(x)
+        # Append mask tokens if mask is provided
+        if mask is not None:
+            n, c, h, w = x.shape
+            mask = mask.reshape(-1, h, w).unsqueeze(1).type_as(x)
+            mask_token = self.mask_token.repeat(x.shape[0], 1, x.shape[2], x.shape[3])
+            x = x * (1. - mask) + mask_token * mask
         
-        # Final prediction
-        reconstructed = self.pred(x)
+        # Decoder blocks
+        x = self.decoder(x)
         
-        return reconstructed
+        # Prediction (patch-wise output in channels)
+        pred = self.pred(x)
+        
+        return pred
 
 
 class MaskDecoder(nn.Module):
-    """Mask decoder for self-supervised pre-training."""
+    """Mask decoder for self-supervised pre-training following FCMAE pattern."""
     
-    def __init__(self, input_dim, decoder_embed_dim=342, decoder_depth=1):
+    def __init__(self, input_dim, decoder_embed_dim=512, decoder_depth=1, patch_size=32):
         super().__init__()
+        self.patch_size = patch_size
         
-        # Project input channels to decoder embedding dimension
+        # Following FCMAE implementation exactly
+        # proj: input_dim -> decoder_embed_dim  
         self.proj = nn.Conv2d(input_dim, decoder_embed_dim, kernel_size=1)
         
-        # Stack of ConvNeXt V2 blocks
-        self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim) for _ in range(decoder_depth)
-        ])
+        # mask token for reconstruction
+        self.mask_token = nn.Parameter(torch.zeros(1, decoder_embed_dim, 1, 1))
         
-        # Final prediction layer for mask reconstruction
-        self.pred = nn.Conv2d(decoder_embed_dim, 1, kernel_size=1)
-        self.sigmoid = nn.Sigmoid()
+        # decoder: Stack of ConvNeXt V2 blocks
+        decoder = [Block(decoder_embed_dim, drop_path=0.) for _ in range(decoder_depth)]
+        self.decoder = nn.Sequential(*decoder)
         
-    def forward(self, freq_features):
+        # pred: decoder_embed_dim -> patch_size^2 * 1 (for mask reconstruction following FCMAE)
+        self.pred = nn.Conv2d(decoder_embed_dim, patch_size ** 2 * 1, kernel_size=1)
+        
+        # Initialize weights following FCMAE pattern
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, m):
+        """Initialize weights following FCMAE pattern."""
+        if isinstance(m, nn.Conv2d):
+            w = m.weight.data
+            trunc_normal_(w.view([w.shape[0], -1]))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        if isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        # Initialize mask token
+        if hasattr(self, 'mask_token'):
+            torch.nn.init.normal_(self.mask_token, std=.02)
+        
+    def forward(self, freq_features, mask=None):
         """
         Args:
-            freq_features: (B, input_dim, H, W)
+            freq_features: (B, input_dim, H, W) - typically (B, 512, 8, 8)
+            mask: (B, H*W) - optional mask for reconstruction
             
         Returns:
-            reconstructed_mask: (B, 1, H, W)
+            pred: (B, patch_size^2 * 1, H, W) - patch-wise mask predictions
         """
-        # Project to decoder dimension
+        # Project to decoder dimension (following FCMAE forward_decoder)
         x = self.proj(freq_features)
         
-        # Apply decoder blocks
-        for block in self.decoder_blocks:
-            x = block(x)
+        # Append mask tokens if mask is provided
+        if mask is not None:
+            n, c, h, w = x.shape
+            mask = mask.reshape(-1, h, w).unsqueeze(1).type_as(x)
+            mask_token = self.mask_token.repeat(x.shape[0], 1, x.shape[2], x.shape[3])
+            x = x * (1. - mask) + mask_token * mask
         
-        # Final prediction
-        x = self.pred(x)
-        reconstructed_mask = self.sigmoid(x)
+        # Decoder blocks
+        x = self.decoder(x)
         
-        return reconstructed_mask
+        # Prediction (patch-wise output in channels)
+        pred = self.pred(x)
+        
+        return pred
 
 
 class ContrastiveProjectionHead(nn.Module):

@@ -14,42 +14,72 @@ from config_utils import safe_load_config, load_config_safe
 
 
 class ImageReconstructionLoss(nn.Module):
-    """L2 loss for image reconstruction on masked patches."""
+    """L2 loss for image reconstruction on masked patches, FCMAE style."""
     
-    def __init__(self):
+    def __init__(self, patch_size=32, norm_pix_loss=False):
         super().__init__()
+        self.patch_size = patch_size
+        self.norm_pix_loss = norm_pix_loss
         self.mse_loss = nn.MSELoss()
     
-    def forward(self, pred, target, mask):
+    def patchify(self, imgs):
+        """
+        imgs: (N, 3, H, W)
+        x: (N, L, patch_size**2 *3)
+        """
+        p = self.patch_size
+        assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
+
+        h = w = imgs.shape[2] // p
+        x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))
+        x = torch.einsum('nchpwq->nhwpqc', x)
+        x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * 3))
+        return x
+    
+    def forward(self, pred, target, mask=None):
         """
         Args:
-            pred: (B, 3, H, W) predicted image
-            target: (B, 3, H, W) original image
-            mask: (B, 1, H, W) binary mask (1 for masked regions)
+            pred: (B, patch_size^2 * 3, H, W) predicted patches from decoder
+            target: (B, 3, H_full, W_full) original image 
+            mask: (B, L) binary mask (1 for removed patches, 0 for kept), optional
             
         Returns:
             loss: scalar tensor
         """
-        # Apply mask - only compute loss on masked regions
-        pred_masked = pred * mask
-        target_masked = target * mask
+        # Convert 4D prediction to 3D following FCMAE forward_loss
+        if len(pred.shape) == 4:
+            n, c, _, _ = pred.shape
+            pred = pred.reshape(n, c, -1)  # (B, patch_size^2 * 3, L)
+            pred = torch.einsum('ncl->nlc', pred)  # (B, L, patch_size^2 * 3)
+
+        # Patchify target image
+        target = self.patchify(target)  # (B, L, patch_size^2 * 3)
         
-        # Compute MSE loss
-        loss = self.mse_loss(pred_masked, target_masked)
+        # Apply pixel normalization if enabled
+        if self.norm_pix_loss:
+            mean = target.mean(dim=-1, keepdim=True)
+            var = target.var(dim=-1, keepdim=True)
+            target = (target - mean) / (var + 1.e-6)**.5
         
-        # Normalize by the number of masked pixels
-        num_masked = mask.sum()
-        if num_masked > 0:
-            loss = loss * (mask.numel() / num_masked)
+        # Compute loss
+        loss = (pred - target) ** 2
+        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+
+        # If mask is provided, only compute loss on removed patches
+        if mask is not None:
+            loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+        else:
+            loss = loss.mean()  # mean loss on all patches
         
         return loss
 
 
 class MaskReconstructionLoss(nn.Module):
-    """Combined L1 and SSIM loss for mask reconstruction."""
+    """Combined L1 and SSIM loss for mask reconstruction, FCMAE style."""
     
-    def __init__(self, config=None):
+    def __init__(self, patch_size=32, config=None):
         super().__init__()
+        self.patch_size = patch_size
         
         # Load config if provided
         if config is None:
@@ -61,21 +91,70 @@ class MaskReconstructionLoss(nn.Module):
         self.l1_weight = config['training']['pretrain']['l1_weight']
         self.ssim_weight = config['training']['pretrain']['ssim_weight']
         self.l1_loss = nn.L1Loss()
+        
+    def patchify_mask(self, masks):
+        """
+        masks: (N, 1, H, W)
+        x: (N, L, patch_size**2 * 1)
+        """
+        p = self.patch_size
+        assert masks.shape[2] == masks.shape[3] and masks.shape[2] % p == 0
+
+        h = w = masks.shape[2] // p
+        x = masks.reshape(shape=(masks.shape[0], 1, h, p, w, p))
+        x = torch.einsum('nchpwq->nhwpqc', x)
+        x = x.reshape(shape=(masks.shape[0], h * w, p**2 * 1))
+        return x
+        
+    def unpatchify_mask(self, x):
+        """
+        x: (N, L, patch_size**2 * 1)
+        masks: (N, 1, H, W)
+        """
+        p = self.patch_size
+        h = w = int(x.shape[1]**.5)
+        assert h * w == x.shape[1]
+        
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, 1))
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        masks = x.reshape(shape=(x.shape[0], 1, h * p, h * p))
+        return masks
     
-    def forward(self, pred_mask, target_mask):
+    def forward(self, pred_mask, target_mask, mask=None):
         """
         Args:
-            pred_mask: (B, 1, H, W) predicted mask
-            target_mask: (B, 1, H, W) ground truth mask
+            pred_mask: (B, patch_size^2 * 1, H, W) predicted mask patches from decoder
+            target_mask: (B, 1, H_full, W_full) ground truth mask
+            mask: (B, L) binary mask (1 for removed patches, 0 for kept), optional
             
         Returns:
             loss: scalar tensor
         """
-        # L1 loss
-        l1_loss = self.l1_loss(pred_mask, target_mask)
+        # Convert 4D prediction to 3D following FCMAE pattern
+        if len(pred_mask.shape) == 4:
+            n, c, _, _ = pred_mask.shape
+            pred_mask = pred_mask.reshape(n, c, -1)  # (B, patch_size^2 * 1, L)
+            pred_mask = torch.einsum('ncl->nlc', pred_mask)  # (B, L, patch_size^2 * 1)
+
+        # Patchify target mask
+        target = self.patchify_mask(target_mask)  # (B, L, patch_size^2 * 1)
+        
+        # Compute patch-wise L1 loss 
+        l1_loss = (pred_mask - target).abs().mean(dim=-1)  # [N, L], mean loss per patch
+        
+        # If mask is provided, only compute loss on removed patches
+        if mask is not None:
+            l1_loss = (l1_loss * mask).sum() / mask.sum()  # mean loss on removed patches
+        else:
+            l1_loss = l1_loss.mean()  # mean loss on all patches
+        
+        # For SSIM, we need to convert back to full resolution
+        # Unpatchify predictions for SSIM calculation
+        pred_full = self.unpatchify_mask(pred_mask)  # (B, 1, H, W)
+        pred_full = torch.sigmoid(pred_full)  # Apply sigmoid for proper range
         
         # SSIM loss (1 - SSIM for minimization)
-        ssim_val = ssim(pred_mask, target_mask, data_range=1.0, size_average=True)
+        ssim_val = ssim(pred_full, target_mask, data_range=1.0, size_average=True)
         ssim_loss = 1.0 - ssim_val
         
         # Combined loss
@@ -150,8 +229,8 @@ class CombinedPretrainLoss(nn.Module):
         self.mask_weight = config['training']['pretrain']['mask_loss_weight']
         self.supcon_weight = config['training']['pretrain']['supcon_loss_weight']
         
-        self.image_loss = ImageReconstructionLoss()
-        self.mask_loss = MaskReconstructionLoss(config=config)
+        self.image_loss = ImageReconstructionLoss(patch_size=32)
+        self.mask_loss = MaskReconstructionLoss(patch_size=32, config=config)
         self.supcon_loss = losses.SupConLoss(temperature=config['training']['pretrain']['supcon_temperature'])
     
     def forward(self, outputs, targets):
@@ -168,13 +247,14 @@ class CombinedPretrainLoss(nn.Module):
         img_loss = self.image_loss(
             outputs['reconstructed_image'],
             targets['original_image'],
-            targets['mask']
+            targets.get('mask', None)  # mask for removed patches (optional)
         )
         
         # Mask reconstruction loss
         mask_loss_val = self.mask_loss(
             outputs['reconstructed_mask'],
-            targets['ground_truth_mask']
+            targets['ground_truth_mask'],
+            targets.get('mask', None)  # mask for removed patches (optional)
         )
         
         # Supervised contrastive loss

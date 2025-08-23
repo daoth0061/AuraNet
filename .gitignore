@@ -217,3 +217,7 @@ train_examples.py
 install.py
 visualize_architecture.py
 auranet_architecture.png
+convnextv2_sparse.py
+convnextv2.py
+fcmae.py
+utils.py
