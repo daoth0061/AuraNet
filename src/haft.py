@@ -320,8 +320,9 @@ class HAFT(nn.Module):
                 
                 original_patch = channel_features[:, :, start_h:end_h, start_w:end_w]
                 
-                # Apply frequency domain filtering
-                patch_fft = torch.fft.fft2(original_patch.squeeze(1))
+                # Apply frequency domain filtering - ensure float32 for complex operations
+                original_patch_float32 = original_patch.float()  # Convert to float32 for FFT
+                patch_fft = torch.fft.fft2(original_patch_float32.squeeze(1))
                 magnitude = torch.abs(patch_fft)
                 # Use atan2 instead of angle to avoid CUDA kernel compilation issues
                 phase = torch.atan2(patch_fft.imag, patch_fft.real)
@@ -333,6 +334,9 @@ class HAFT(nn.Module):
                 # Reconstruct enhanced patch
                 enhanced_fft = enhanced_magnitude * torch.exp(1j * enhanced_phase)
                 enhanced_patch = torch.real(torch.fft.ifft2(enhanced_fft)).unsqueeze(1)
+                
+                # Convert back to original dtype
+                enhanced_patch = enhanced_patch.to(original_patch.dtype)
                 
                 # Store patch info for reconstruction
                 enhanced_patches.append({

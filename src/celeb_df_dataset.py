@@ -271,14 +271,24 @@ class CelebDFDataset(Dataset):
         """Prepare sample for pre-training."""
         B, H, W = 1, self.img_size[0], self.img_size[1]
         
-        # Create random mask
+        # Create random mask at patch level
         mask_ratio = self.config['training']['pretrain']['mask_ratio']
         block_size = self.config['model']['block_size']
-        mask = self._create_random_mask((B, H, W), mask_ratio, block_size)
-        mask = mask.squeeze(0)  # Remove batch dimension
+        patch_mask = self._create_random_mask((B, H, W), mask_ratio, block_size)
+        patch_mask = patch_mask.squeeze(0)  # Remove batch dimension: (L,)
         
-        # Create masked image
-        masked_image = image_tensor * (1 - mask)
+        # Create spatial mask for masking the image (for visualization)
+        mask_h = H // block_size
+        mask_w = W // block_size
+        spatial_mask = patch_mask.view(mask_h, mask_w)
+        spatial_mask = torch.nn.functional.interpolate(
+            spatial_mask.unsqueeze(0).unsqueeze(0), 
+            size=(H, W), 
+            mode='nearest'
+        ).squeeze()  # (H, W)
+        
+        # Create masked image (apply spatial mask)
+        masked_image = image_tensor * (1 - spatial_mask.unsqueeze(0))  # (3, H, W)
         
         # Load ground truth mask if available
         if sample['mask_path'] is not None:
@@ -294,7 +304,8 @@ class CelebDFDataset(Dataset):
         return {
             'image': masked_image,
             'original_image': image_tensor,
-            'mask': mask,
+            'mask': patch_mask,  # (L,) - patch-level mask for loss computation
+            'spatial_mask': spatial_mask.unsqueeze(0),  # (1, H, W) - spatial mask for visualization
             'ground_truth_mask': gt_mask,
             'label': torch.tensor(sample['label'], dtype=torch.long),
             'video_id': sample['video_id'],
@@ -330,24 +341,36 @@ class CelebDFDataset(Dataset):
         """Create random mask for pre-training."""
         B, H, W = shape
         
-        # Create block-wise mask
-        mask_h = H // block_size
-        mask_w = W // block_size
+        # Create block-wise mask at patch level (following FCMAE)
+        patch_size = block_size  # Use block_size as patch_size
+        mask_h = H // patch_size
+        mask_w = W // patch_size
         
-        # Create mask at block level
-        block_mask = torch.rand(B, mask_h, mask_w) < mask_ratio
+        # Total number of patches
+        L = mask_h * mask_w
         
-        # Upsample to full resolution
-        mask = torch.nn.functional.interpolate(
-            block_mask.float().unsqueeze(1), 
+        # Create mask at patch level (B, L) - this is what the loss expects
+        num_masked = int(mask_ratio * L)
+        
+        # Create patch-level mask
+        patch_mask = torch.zeros(B, L)
+        for b in range(B):
+            # Randomly select patches to mask
+            masked_indices = torch.randperm(L)[:num_masked]
+            patch_mask[b, masked_indices] = 1.0
+        
+        # Also create spatial mask for visualization (optional)
+        spatial_mask = patch_mask.view(B, mask_h, mask_w)
+        spatial_mask = torch.nn.functional.interpolate(
+            spatial_mask.unsqueeze(1), 
             size=(H, W), 
             mode='nearest'
         )
         
-        return mask
+        return patch_mask  # Return (B, L) for loss computation
 
 
-def create_celeb-df-dataloaders(data_root: str, mode: str = 'finetune', 
+def create_celeb_df_dataloaders(data_root: str, mode: str = 'finetune', 
                                config: Optional[Dict] = None) -> Tuple[DataLoader, DataLoader]:
     """
     Create data loaders for Celeb-DF dataset.
@@ -415,7 +438,7 @@ def create_celeb-df-dataloaders(data_root: str, mode: str = 'finetune',
     return train_loader, test_loader
 
 
-def analyze_celeb-df-dataset(data_root: str) -> Dict:
+def analyze_celeb_df_dataset(data_root: str) -> Dict:
     """
     Analyze the Celeb-DF dataset structure and provide statistics.
     
@@ -491,7 +514,7 @@ if __name__ == "__main__":
     
     if args.analyze:
         print("Analyzing Celeb-DF dataset...")
-        stats = analyze_celeb-df-dataset(args.data_root)
+        stats = analyze_celeb_df_dataset(args.data_root)
         print(f"Dataset Statistics:")
         for key, value in stats.items():
             print(f"  {key}: {value}")
@@ -499,7 +522,7 @@ if __name__ == "__main__":
     
     # Test data loaders
     print("Testing data loaders...")
-    train_loader, test_loader = create_celeb-df-dataloaders(
+    train_loader, test_loader = create_celeb_df_dataloaders(
         data_root=args.data_root,
         mode='finetune'
     )

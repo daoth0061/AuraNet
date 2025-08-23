@@ -333,7 +333,8 @@ class AuraNet(nn.Module):
         """
         try:
             # Load pre-trained weights with mixed precision compatibility
-            checkpoint = torch.load(pretrained_path, map_location='cpu')
+            # Use weights_only=False for compatibility with older checkpoint formats
+            checkpoint = torch.load(pretrained_path, map_location='cpu', weights_only=False)
             
             # Extract state dict (handle different checkpoint formats)
             if 'model' in checkpoint:
@@ -366,9 +367,27 @@ class AuraNet(nn.Module):
                                 mapped_weights[new_key] = value
                                 spatial_layers_loaded += 1
                             else:
-                                print(f"Shape mismatch for {new_key}: "
-                                      f"model {model_dict[new_key].shape} vs "
-                                      f"pretrained {value.shape}")
+                                # Handle GRN parameter shape mismatch
+                                if 'grn.beta' in new_key or 'grn.gamma' in new_key:
+                                    # ConvNeXtV2: [1, C] -> AuraNet: [1, 1, 1, C]
+                                    if len(value.shape) == 2 and len(model_dict[new_key].shape) == 4:
+                                        # Reshape [1, C] to [1, 1, 1, C]
+                                        reshaped_value = value.view(1, 1, 1, -1)
+                                        if model_dict[new_key].shape == reshaped_value.shape:
+                                            mapped_weights[new_key] = reshaped_value
+                                            spatial_layers_loaded += 1
+                                        else:
+                                            print(f"Shape mismatch after reshape for {new_key}: "
+                                                  f"model {model_dict[new_key].shape} vs "
+                                                  f"reshaped {reshaped_value.shape}")
+                                    else:
+                                        print(f"Shape mismatch for {new_key}: "
+                                              f"model {model_dict[new_key].shape} vs "
+                                              f"pretrained {value.shape}")
+                                else:
+                                    print(f"Shape mismatch for {new_key}: "
+                                          f"model {model_dict[new_key].shape} vs "
+                                          f"pretrained {value.shape}")
                         elif not strict:
                             # In non-strict mode, try to find similar layers
                             similar_keys = [k for k in model_dict.keys() if k.endswith(new_key.split('.')[-1])]
