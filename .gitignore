@@ -222,3 +222,7 @@ convnextv2.py
 fcmae.py
 utils.py
 optimize_memory.py
+*.pt 
+PRETRAINED*.py
+verify_implementation.py
+

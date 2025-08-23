@@ -98,9 +98,26 @@ class DistributedTrainer:
     
     def _create_model(self):
         """Create and setup the model."""
-        # Create model
-        model = create_auranet(config=self.config)
+        # Determine if we should use pretrained weights for current mode
+        use_pretrained = False
+        if self.mode == 'pretrain':
+            use_pretrained = self.config['model'].get('use_pretrained_pretrain', False)
+        elif self.mode == 'finetune':
+            use_pretrained = self.config['model'].get('use_pretrained_finetune', False)
+        
+        # Create model with pretrained weights if specified
+        model = create_auranet(
+            config=self.config,
+            use_pretrained=use_pretrained,
+            pretrained_path=self.config['model'].get('pretrained_path', None)
+        )
         model = model.to(self.device)
+        
+        # Enable mixed precision support - ensure model parameters are in correct dtype
+        if self.config.get('mixed_precision', False):
+            # Convert model to half precision for mixed precision training
+            # This is important for compatibility with pretrained weights
+            model = model.half() if self.config.get('full_half_precision', False) else model
         
         # Wrap with DDP only if using multiple GPUs
         if self.world_size > 1:
@@ -542,12 +559,16 @@ def main():
     parser = argparse.ArgumentParser(description='Train AuraNet on Celeb-DF Dataset')
     parser.add_argument('--config', type=str, required=True,
                        help='Path to configuration file')
-    parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune'],
+    parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune', 'both'],
                        default='finetune', help='Training mode')
     parser.add_argument('--data_root', type=str, required=True,
                        help='Root directory of Celeb-DF dataset')
     parser.add_argument('--gpus', type=int, default=None,
                        help='Number of GPUs to use (auto-detect if not specified)')
+    parser.add_argument('--use_pretrained', type=str, choices=['y', 'n', 'yes', 'no'],
+                       default='n', help='Use ConvNeXtV2 pretrained weights for spatial stream')
+    parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
+                       help='Path to ConvNeXtV2 pretrained weights file')
     
     args = parser.parse_args()
     
@@ -557,6 +578,25 @@ def main():
     
     # Update data root in config
     config['dataset']['data_root'] = args.data_root
+    
+    # Process pretrained weights arguments
+    use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
+    config['model']['use_pretrained'] = use_pretrained
+    config['model']['pretrained_path'] = args.pretrained_path
+    
+    # Handle training mode logic
+    if args.mode == 'both':
+        config['training']['run_pretrain'] = True
+        config['training']['run_finetune'] = True
+        # For 'both' mode, only use pretrained weights in pretraining stage
+        config['model']['use_pretrained_pretrain'] = use_pretrained
+        config['model']['use_pretrained_finetune'] = False
+    else:
+        config['training']['run_pretrain'] = (args.mode == 'pretrain')
+        config['training']['run_finetune'] = (args.mode == 'finetune')
+        # For single mode, use pretrained weights if requested
+        config['model']['use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
+        config['model']['use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
     
     # Determine number of GPUs
     if args.gpus is not None:
