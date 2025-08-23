@@ -202,14 +202,14 @@ class TrainingEvaluator:
             img_path_obj = Path(img_path)
             
             # Extract video_id and filename from fake image path
-            # Expected structure: .../celeb_df_fake/video_id/filename.jpg
-            # Corresponding mask: .../celeb_df_mask/video_id/filename.jpg
-            if 'celeb_df_fake' in str(img_path_obj):
-                # Extract relative path from celeb_df_fake
+            # Expected structure: .../celeb-df-fake/video_id/filename.jpg
+            # Corresponding mask: .../celeb-df-mask/video_id/filename.jpg
+            if 'celeb-df-fake' in str(img_path_obj):
+                # Extract relative path from celeb-df-fake
                 parts = img_path_obj.parts
                 fake_idx = None
                 for i, part in enumerate(parts):
-                    if part == 'celeb_df_fake':
+                    if part == 'celeb-df-fake':
                         fake_idx = i
                         break
                 

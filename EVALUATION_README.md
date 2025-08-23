@@ -35,7 +35,7 @@ Hệ thống evaluation mới của AuraNet cung cấp đánh giá chi tiết ch
 
 ```bash
 python launch_training.py \
-    --data_root celeb_df_dataset \
+    --data_root celeb-df-dataset \
     --mask_gt_dir /kaggle/input/ff-mask/ \
     --mode both \
     --gpus 1 \
@@ -58,7 +58,7 @@ evaluation:
 python test_evaluation.py
 
 # Test với dataset thực
-python test_evaluation.py dataset --data_root celeb_df_dataset --mask_gt_dir /path/to/masks
+python test_evaluation.py dataset --data_root celeb-df-dataset --mask_gt_dir /path/to/masks
 ```
 
 ## File Structure
@@ -66,7 +66,7 @@ python test_evaluation.py dataset --data_root celeb_df_dataset --mask_gt_dir /pa
 ```
 src/
 ├── training_evaluator.py     # Main evaluation class
-├── celeb_df_dataset.py      # Updated dataset với image_path
+├── celeb-df-dataset.py      # Updated dataset với image_path
 └── ...
 
 config_celeb_df.yaml         # Updated config với evaluation settings

@@ -37,7 +37,7 @@ def validate_dataset(data_root):
     """Validate dataset structure."""
     data_root = Path(data_root)
     
-    required_dirs = ['celeb_df_real', 'celeb_df_fake', 'celeb_df_mask']
+    required_dirs = ['celeb-df-real', 'celeb-df-fake', 'celeb-df-mask']
     missing_dirs = []
     
     for dir_name in required_dirs:
@@ -214,12 +214,12 @@ def main():
     # Set data root in config
     config_updates['dataset.data_root'] = args.data_root
     
-    # Set mask GT directory (default to celeb_df_mask if not provided)
+    # Set mask GT directory (default to celeb-df-mask if not provided)
     if args.mask_gt_dir:
         config_updates['evaluation.mask_gt_dir'] = args.mask_gt_dir
     else:
-        # Default to the standard celeb_df_mask directory
-        config_updates['evaluation.mask_gt_dir'] = 'celeb_df_mask'
+        # Default to the standard celeb-df-mask directory
+        config_updates['evaluation.mask_gt_dir'] = 'celeb-df-mask'
     
     # Update distributed settings
     if effective_num_gpus > 1:

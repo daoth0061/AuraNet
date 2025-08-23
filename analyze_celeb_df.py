@@ -19,7 +19,7 @@ import seaborn as sns
 # Add src directory to path
 sys.path.append(str(Path(__file__).parent / 'src'))
 
-from celeb_df_dataset import analyze_celeb_df_dataset
+from celeb-df-dataset import analyze_celeb-df-dataset
 
 
 class CelebDFAnalyzer:
@@ -58,7 +58,7 @@ class CelebDFAnalyzer:
     
     def _get_basic_statistics(self) -> Dict:
         """Get basic dataset statistics."""
-        stats = analyze_celeb_df_dataset(str(self.data_root))
+        stats = analyze_celeb-df-dataset(str(self.data_root))
         return stats
     
     def _analyze_videos(self) -> Dict:
@@ -292,7 +292,7 @@ class CelebDFAnalyzer:
         analysis = self.analyze_dataset_structure()
         
         # Save analysis results
-        report_file = output_dir / "celeb_df_analysis.json"
+        report_file = output_dir / "celeb-df-analysis.json"
         with open(report_file, 'w') as f:
             json.dump(analysis, f, indent=2, default=str)
         

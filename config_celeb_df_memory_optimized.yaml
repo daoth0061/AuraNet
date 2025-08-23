@@ -27,16 +27,16 @@ data_loading:
   pin_memory: false
   prefetch_factor: 1
 dataset:
-  data_root: path/to/celeb_df_dataset
+  data_root: path/to/celeb-df-dataset
   match_fake_to_mask: true
   name: celeb_df
   sampling_strategy: sorted_index_based
   split_modulo: 4
   split_ratio: 0.75
   subfolders:
-    fake: celeb_df_fake
-    mask: celeb_df_mask
-    real: celeb_df_real
+    fake: celeb-df-fake
+    mask: celeb-df-mask
+    real: celeb-df-real
 decoder_depth: 1
 decoder_embed_dim: 342
 depths:
@@ -62,7 +62,7 @@ dsf_dim: 512
 evaluation:
   batch_size: 16
   detailed_eval_freq: 1
-  mask_gt_dir: celeb_df_mask
+  mask_gt_dir: celeb-df-mask
   metrics:
   - accuracy
   - precision

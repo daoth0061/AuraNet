@@ -26,7 +26,7 @@ class CelebDFDataset(Dataset):
                  config: Optional[Dict] = None, transform=None):
         """
         Args:
-            data_root: Root directory containing celeb_df_real, celeb_df_fake, celeb_df_mask
+            data_root: Root directory containing celeb-df-real, celeb-df-fake, celeb-df-mask
             mode: 'pretrain' or 'finetune'
             split: 'train' or 'test'
             config: Configuration dictionary
@@ -347,7 +347,7 @@ class CelebDFDataset(Dataset):
         return mask
 
 
-def create_celeb_df_dataloaders(data_root: str, mode: str = 'finetune', 
+def create_celeb-df-dataloaders(data_root: str, mode: str = 'finetune', 
                                config: Optional[Dict] = None) -> Tuple[DataLoader, DataLoader]:
     """
     Create data loaders for Celeb-DF dataset.
@@ -415,7 +415,7 @@ def create_celeb_df_dataloaders(data_root: str, mode: str = 'finetune',
     return train_loader, test_loader
 
 
-def analyze_celeb_df_dataset(data_root: str) -> Dict:
+def analyze_celeb-df-dataset(data_root: str) -> Dict:
     """
     Analyze the Celeb-DF dataset structure and provide statistics.
     
@@ -437,7 +437,7 @@ def analyze_celeb_df_dataset(data_root: str) -> Dict:
     }
     
     # Analyze real images
-    real_dir = data_root / 'celeb_df_real'
+    real_dir = data_root / 'celeb-df-real'
     if real_dir.exists():
         for video_dir in real_dir.iterdir():
             if video_dir.is_dir():
@@ -445,7 +445,7 @@ def analyze_celeb_df_dataset(data_root: str) -> Dict:
                 stats['real_images'] += len(list(video_dir.glob('*.jpg')))
     
     # Analyze fake images
-    fake_dir = data_root / 'celeb_df_fake'
+    fake_dir = data_root / 'celeb-df-fake'
     if fake_dir.exists():
         for video_dir in fake_dir.iterdir():
             if video_dir.is_dir():
@@ -453,7 +453,7 @@ def analyze_celeb_df_dataset(data_root: str) -> Dict:
                 stats['fake_images'] += len(list(video_dir.glob('*.jpg')))
     
     # Analyze mask images
-    mask_dir = data_root / 'celeb_df_mask'
+    mask_dir = data_root / 'celeb-df-mask'
     mask_files = set()
     if mask_dir.exists():
         for video_dir in mask_dir.iterdir():
@@ -491,7 +491,7 @@ if __name__ == "__main__":
     
     if args.analyze:
         print("Analyzing Celeb-DF dataset...")
-        stats = analyze_celeb_df_dataset(args.data_root)
+        stats = analyze_celeb-df-dataset(args.data_root)
         print(f"Dataset Statistics:")
         for key, value in stats.items():
             print(f"  {key}: {value}")
@@ -499,7 +499,7 @@ if __name__ == "__main__":
     
     # Test data loaders
     print("Testing data loaders...")
-    train_loader, test_loader = create_celeb_df_dataloaders(
+    train_loader, test_loader = create_celeb-df-dataloaders(
         data_root=args.data_root,
         mode='finetune'
     )
