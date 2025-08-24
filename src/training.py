@@ -283,46 +283,28 @@ class CombinedPretrainLoss(nn.Module):
         print(f"DEBUG - Available target keys: {list(targets.keys())}")
         
         # Image reconstruction loss
-        image_key = 'reconstructed_image'
-        if image_key not in outputs:
-            print(f"WARNING: '{image_key}' not found in outputs. Available keys: {list(outputs.keys())}")
-            # Create a dummy tensor to avoid breaking training
-            img_loss = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
-        else:
-            img_loss = self.image_loss(
-                outputs[image_key],
-                targets['original_image'],
-                targets.get('mask', None)  # mask for removed patches (optional)
-            )
+        img_loss = self.image_loss(
+            outputs['reconstructed_image'],
+            targets['original_image'],
+            targets.get('mask', None)  # mask for removed patches (optional)
+        )
         
-        # Mask reconstruction loss - handle both original and optimized model keys
-        mask_key = 'reconstructed_mask' if 'reconstructed_mask' in outputs else 'predicted_mask'
-        if mask_key not in outputs:
-            print(f"WARNING: Neither 'reconstructed_mask' nor 'predicted_mask' found in outputs. Available keys: {list(outputs.keys())}")
-            # Create a dummy tensor to avoid breaking training
-            mask_loss_val = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
-        else:
-            mask_loss_val = self.mask_loss(
-                outputs[mask_key],
-                targets['ground_truth_mask'],
-                targets.get('mask', None)  # mask for removed patches (optional)
-            )
+        # Mask reconstruction loss
+        mask_loss_val = self.mask_loss(
+            outputs['reconstructed_mask'],
+            targets['ground_truth_mask'],
+            targets.get('mask', None)  # mask for removed patches (optional)
+        )
         
         # Supervised contrastive loss
-        embedding_key = 'contrastive_embedding' if 'contrastive_embedding' in outputs else 'contrastive_feature'
-        if embedding_key not in outputs:
-            print(f"WARNING: Neither 'contrastive_embedding' nor 'contrastive_feature' found in outputs. Available keys: {list(outputs.keys())}")
-            # Create a dummy tensor to avoid breaking training
-            supcon_loss_val = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+        embeddings = outputs['contrastive_embedding']
+        labels = targets.get('labels', None)
+        
+        if labels is not None:
+            # Create pseudo-labels for contrastive learning
+            supcon_loss_val = self.supcon_loss(embeddings, labels)
         else:
-            embeddings = outputs[embedding_key]
-            labels = targets.get('labels', None)
-            
-            if labels is not None:
-                # Create pseudo-labels for contrastive learning
-                supcon_loss_val = self.supcon_loss(embeddings, labels)
-            else:
-                supcon_loss_val = torch.tensor(0.0, device=embeddings.device)
+            supcon_loss_val = torch.tensor(0.0, device=embeddings.device)
         
         # Combined loss
         total_loss = (self.image_weight * img_loss + 
