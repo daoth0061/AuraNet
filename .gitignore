@@ -235,3 +235,5 @@ IMAGE*.md
 validate*
 convnextV2/
 .vscode/
+examples/
+MULTI_RESOLUTION*

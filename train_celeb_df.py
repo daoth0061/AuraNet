@@ -48,6 +48,11 @@ class DistributedTrainer:
         # Setup reproducibility
         self._setup_seed()
         
+        # Reserve GPU memory if configured
+        self.reserved_memory = None
+        if config.get('memory_reservation', {}).get('enabled', False):
+            self._reserve_gpu_memory()
+        
         # Initialize model
         self.model = self._create_model()
         
@@ -95,6 +100,27 @@ class DistributedTrainer:
         if self.config.get('deterministic', False):
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
+    
+    def _reserve_gpu_memory(self):
+        """Reserve a fixed fraction of GPU memory for this rank."""
+        fraction = self.config.get('memory_reservation', {}).get('fraction', 0.6)
+        
+        total_memory = torch.cuda.get_device_properties(self.rank).total_memory
+        fraction_memory = int(total_memory * fraction)
+        
+        self.logger.info(f"Reserving {fraction_memory/1024**3:.1f}GB ({fraction*100:.0f}%) of GPU memory")
+        
+        # Create a tensor that uses the specified amount of memory
+        # Use int8 to minimize overhead
+        try:
+            reserved_memory = torch.zeros(fraction_memory, dtype=torch.int8, device=self.device)
+            # Touch the tensor to ensure allocation
+            reserved_memory[0] = 1
+            self.reserved_memory = reserved_memory
+            self.logger.info("GPU memory reservation successful")
+        except RuntimeError as e:
+            self.logger.warning(f"Failed to reserve GPU memory: {e}")
+            self.reserved_memory = None
     
     def _create_model(self):
         """Create and setup the model."""

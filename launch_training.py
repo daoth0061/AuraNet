@@ -12,6 +12,11 @@ import yaml
 from pathlib import Path
 import torch
 
+# Add src directory to path for config loader
+sys.path.append(str(Path(__file__).parent / 'src'))
+from config_loader import (load_resolution_config, create_resolution_aware_paths, 
+                          validate_resolution_config, update_config_from_args)
+
 
 def check_gpu_availability():
     """Check GPU availability and return device info."""
@@ -123,12 +128,17 @@ def run_multi_gpu_training(config_path, data_root, mode, use_pretrained, pretrai
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description='Launch AuraNet Training on Celeb-DF')
+    
+    # Add image size parameter
+    parser.add_argument('--img_size', type=int, choices=[64, 128, 256], required=True,
+                       help='Image size for training (64, 128, or 256)')
+    
     parser.add_argument('--data_root', type=str, required=True,
                        help='Root directory of Celeb-DF dataset')
     parser.add_argument('--mask_gt_dir', type=str, default=None,
                        help='Directory containing ground truth masks for evaluation (e.g., /kaggle/input/ff-mask/)')
-    parser.add_argument('--config', type=str, default='config_celeb_df.yaml',
-                       help='Configuration file path')
+    parser.add_argument('--config', type=str, default=None,
+                       help='Configuration file path (will auto-select based on img_size if not provided)')
     parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune', 'both'],
                        default='finetune', help='Training mode')
     parser.add_argument('--gpus', type=int, default=None,
@@ -154,9 +164,29 @@ def main():
     
     args = parser.parse_args()
     
+    # Load resolution-specific configuration
+    try:
+        config = load_resolution_config(args.img_size)
+        config = create_resolution_aware_paths(config, args.img_size)
+        validate_resolution_config(config, args.img_size)
+        print(f"✓ Loaded configuration for {args.img_size}×{args.img_size} images")
+    except Exception as e:
+        print(f"✗ Error loading configuration for {args.img_size}×{args.img_size}: {e}")
+        return 1
+    
     # Validate dataset
     if not validate_dataset(args.data_root):
         return 1
+    
+    # Update configuration with command line arguments
+    config = update_config_from_args(config, args)
+    
+    # Create a temporary config file for this run
+    temp_config_path = f"temp_config_{args.img_size}.yaml"
+    with open(temp_config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, indent=2)
+    
+    print(f"Created temporary config: {temp_config_path}")
     
     # Check GPU availability
     num_available_gpus, gpu_info = check_gpu_availability()
@@ -189,92 +219,43 @@ def main():
         analyzer_cmd = [
             sys.executable, 'analyze_celeb_df.py',
             '--data_root', args.data_root,
-            '--config', args.config
+            '--config', temp_config_path
         ]
         subprocess.run(analyzer_cmd)
         return 0
     
-    # Prepare configuration updates
-    config_updates = {}
-    
-    if args.batch_size is not None:
-        if args.mode == 'pretrain' or args.mode == 'both':
-            config_updates['training.pretrain.batch_size'] = args.batch_size
-        if args.mode == 'finetune' or args.mode == 'both':
-            config_updates['training.finetune.batch_size'] = args.batch_size
-    
-    if args.learning_rate is not None:
-        if args.mode == 'pretrain' or args.mode == 'both':
-            config_updates['training.pretrain.learning_rate'] = args.learning_rate
-        if args.mode == 'finetune' or args.mode == 'both':
-            config_updates['training.finetune.encoder_lr'] = args.learning_rate * 0.1
-            config_updates['training.finetune.head_lr'] = args.learning_rate
-    
-    if args.epochs is not None:
-        if args.mode == 'pretrain' or args.mode == 'both':
-            config_updates['training.pretrain.epochs'] = args.epochs
-        if args.mode == 'finetune' or args.mode == 'both':
-            config_updates['training.finetune.epochs'] = args.epochs
-    
-    if args.resume_from is not None:
-        config_updates['checkpoint.resume_from'] = args.resume_from
-    
-    # Set data root in config
-    config_updates['dataset.data_root'] = args.data_root
-    
-    # Process pretrained weights arguments
-    use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
-    config_updates['model.use_pretrained'] = use_pretrained
-    config_updates['model.pretrained_path'] = args.pretrained_path
-    
-    # Handle training mode logic for pretrained weights
-    if args.mode == 'both':
-        # For 'both' mode, only use pretrained weights in pretraining stage
-        config_updates['model.use_pretrained_pretrain'] = use_pretrained
-        config_updates['model.use_pretrained_finetune'] = False
-    else:
-        # For single mode, use pretrained weights if requested
-        config_updates['model.use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
-        config_updates['model.use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
-    
-    # Set mask GT directory (default to celeb-df-mask if not provided)
-    if args.mask_gt_dir:
-        config_updates['evaluation.mask_gt_dir'] = args.mask_gt_dir
-    else:
-        # Default to the standard celeb-df-mask directory
-        config_updates['evaluation.mask_gt_dir'] = 'celeb-df-mask'
-    
-    # Update distributed settings
+    # Update distributed settings based on effective GPUs
     if effective_num_gpus > 1:
-        config_updates['distributed.enabled'] = True
-        config_updates['distributed.world_size'] = effective_num_gpus
+        config['distributed']['enabled'] = True
+        config['distributed']['world_size'] = effective_num_gpus
     else:
-        config_updates['distributed.enabled'] = False
+        config['distributed']['enabled'] = False
     
-    # Create temporary config with updates
-    if config_updates:
-        temp_config_path = update_config_for_training(args.config, config_updates)
-    else:
-        temp_config_path = args.config
+    # Re-save config with final distributed settings
+    with open(temp_config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, indent=2)
     
     # Show configuration
     print(f"Training Configuration:")
+    print(f"  Image size: {args.img_size}×{args.img_size}")
     print(f"  Mode: {args.mode}")
     print(f"  GPUs: {effective_num_gpus}")
     print(f"  Data root: {args.data_root}")
     print(f"  Config: {temp_config_path}")
-    
-    if config_updates:
-        print(f"  Configuration overrides:")
-        for key, value in config_updates.items():
-            print(f"    {key}: {value}")
+    print(f"  Batch size (finetune): {config['training']['finetune']['batch_size']}")
+    print(f"  Model dims: {config['dims']}")
+    print(f"  Mixed precision: {config.get('mixed_precision', False)}")
+    print(f"  Memory reservation: {config.get('memory_reservation', {}).get('fraction', 'N/A')}")
     print()
     
     if args.dry_run:
         print("Dry run mode - exiting without training")
-        if temp_config_path != args.config:
+        if os.path.exists(temp_config_path):
             os.remove(temp_config_path)
         return 0
+    
+    # Process pretrained weights arguments
+    use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
     
     # Run training
     try:
@@ -312,7 +293,7 @@ def main():
     
     finally:
         # Cleanup temporary config
-        if temp_config_path != args.config and os.path.exists(temp_config_path):
+        if os.path.exists(temp_config_path):
             os.remove(temp_config_path)
 
 

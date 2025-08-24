@@ -1,0 +1,83 @@
+# AuraNet Configuration for 256x256 Resolution
+# High-capacity configuration for large images
+
+# Image size
+img_size: [256, 256]
+
+# Backbone architecture - High capacity
+num_stages: 4
+depths: [2, 2, 6, 2]  # Increased depth
+dims: [64, 128, 256, 512]  # Increased channels
+
+# HAFT parameters - High complexity
+num_haft_levels: [3, 3, 2, 1]  # More levels
+num_radial_bins: 16  # More bins
+context_vector_dim: 64  # Larger context
+
+# Final fusion and decoder - Large dimensions
+dsf_dim: 512
+decoder_embed_dim: 342
+decoder_depth: 1  # Deeper decoder
+
+# Model parameters - Scaled for large images
+model:
+  attention_heads: 8  # More heads
+  mlp_hidden_dim: 128  # Larger MLP
+  ffn_hidden_ratio: 4
+
+  # Pretrained model configuration
+  pretrained:
+    enabled: true
+    spatial_branch: "convnextv2_pico_1k_224_fcmae.pt"
+    freeze_layers: []
+    fine_tune_bn_stats: true
+
+# Memory configuration - High memory usage
+memory_reservation:
+  enabled: true
+  fraction: 0.8
+
+# Training parameters - Optimized for 256x256
+training:
+  pretrain:
+    batch_size: 2  # Smaller batch size due to memory
+    learning_rate: 2.5e-05  # Lower LR for smaller batches
+    epochs: 30  # Fewer epochs needed
+    mask_ratio: 0.7  # Higher mask ratio for larger images
+    weight_decay: 0.05  # Higher weight decay
+    warmup_epochs: 2
+    image_loss_weight: 1.0
+    mask_loss_weight: 1.0
+    supcon_loss_weight: 0.5
+    ssim_weight: 0.15
+    l1_weight: 0.85
+    supcon_temperature: 0.1
+    patience: 8
+    min_delta: 0.0001
+
+  finetune:
+    batch_size: 2  # Very small batch size
+    encoder_lr: 2.5e-06  # Very low encoder LR
+    head_lr: 0.0005  # Lower head LR
+    epochs: 20  # Fewer epochs
+    weight_decay: 0.05
+    warmup_epochs: 1
+    seg_loss_weight: 1.0
+    class_loss_weight: 1.0
+    seg_ssim_weight: 0.15
+    seg_l1_weight: 0.85
+    patience: 6
+    min_delta: 0.0001
+
+# Data loading - Memory optimized
+data_loading:
+  num_workers: 1  # Fewer workers to save memory
+  pin_memory: false
+  prefetch_factor: 1
+
+# Evaluation - Smaller batch sizes
+evaluation:
+  batch_size: 2
+
+# Hardware - Definitely need mixed precision
+mixed_precision: true

@@ -19,7 +19,7 @@ import seaborn as sns
 # Add src directory to path
 sys.path.append(str(Path(__file__).parent / 'src'))
 
-from celeb-df-dataset import analyze_celeb-df-dataset
+from celeb_df_dataset import analyze_celeb_df_dataset
 
 
 class CelebDFAnalyzer:

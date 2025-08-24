@@ -1,0 +1,83 @@
+# AuraNet Configuration for 128x128 Resolution
+# Balanced configuration for medium-sized images
+
+# Image size
+img_size: [128, 128]
+
+# Backbone architecture - Medium capacity
+num_stages: 4
+depths: [2, 2, 6, 2]  # Standard depth
+dims: [48, 96, 192, 384]  # Standard channels
+
+# HAFT parameters - Standard complexity
+num_haft_levels: [3, 2, 2, 1]
+num_radial_bins: 16
+context_vector_dim: 48
+
+# Final fusion and decoder - Standard dimensions
+dsf_dim: 384
+decoder_embed_dim: 256
+decoder_depth: 1
+
+# Model parameters - Standard for medium images
+model:
+  attention_heads: 6
+  mlp_hidden_dim: 96
+  ffn_hidden_ratio: 4
+
+  # Pretrained model configuration
+  pretrained:
+    enabled: true
+    spatial_branch: "convnextv2_femto_1k_224_fcmae.pt"
+    freeze_layers: []
+    fine_tune_bn_stats: true
+
+# Memory configuration - Moderate memory usage
+memory_reservation:
+  enabled: true
+  fraction: 0.8
+
+# Training parameters - Optimized for 128x128
+training:
+  pretrain:
+    batch_size: 16  # Medium batch size
+    learning_rate: 5.0e-05
+    epochs: 30
+    mask_ratio: 0.6
+    weight_decay: 0.03
+    warmup_epochs: 3
+    image_loss_weight: 1.0
+    mask_loss_weight: 1.0
+    supcon_loss_weight: 0.5
+    ssim_weight: 0.15
+    l1_weight: 0.85
+    supcon_temperature: 0.1
+    patience: 10
+    min_delta: 0.0001
+
+  finetune:
+    batch_size: 16  # Medium batch size
+    encoder_lr: 5.0e-06
+    head_lr: 0.001
+    epochs: 30
+    weight_decay: 0.02
+    warmup_epochs: 2
+    seg_loss_weight: 1.0
+    class_loss_weight: 1.0
+    seg_ssim_weight: 0.15
+    seg_l1_weight: 0.85
+    patience: 8
+    min_delta: 0.0001
+
+# Data loading - Moderate settings
+data_loading:
+  num_workers: 2
+  pin_memory: false
+  prefetch_factor: 1
+
+# Evaluation
+evaluation:
+  batch_size: 16
+
+# Hardware - Enable mixed precision
+mixed_precision: true

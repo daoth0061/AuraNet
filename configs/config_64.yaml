@@ -1,0 +1,83 @@
+# AuraNet Configuration for 64x64 Resolution
+# Optimized for small images with reduced model capacity
+
+# Image size
+img_size: [64, 64]
+
+# Backbone architecture - Reduced capacity
+num_stages: 4
+depths: [2, 2, 6, 2]  # Reduced depth
+dims: [40, 80, 160, 320]  # Reduced channels
+
+# HAFT parameters - Reduced complexity
+num_haft_levels: [2, 2, 1, 1]  # Fewer levels
+num_radial_bins: 12  # Fewer bins
+context_vector_dim: 32  # Smaller context
+
+# Final fusion and decoder - Smaller dimensions
+dsf_dim: 320
+decoder_embed_dim: 200
+decoder_depth: 1
+
+# Model parameters - Reduced for smaller images
+model:
+  attention_heads: 4  # Fewer heads
+  mlp_hidden_dim: 64  # Smaller MLP
+  ffn_hidden_ratio: 4  # Smaller FFN ratio
+
+  # Pretrained model configuration
+  pretrained:
+    enabled: true
+    spatial_branch: "convnextv2_atto_1k_224_fcmae.pt"
+    freeze_layers: []
+    fine_tune_bn_stats: true
+
+# Memory configuration - Less memory needed
+memory_reservation:
+  enabled: true
+  fraction: 0.8
+
+# Training parameters - Optimized for 64x64
+training:
+  pretrain:
+    batch_size: 32  # Larger batch size possible
+    learning_rate: 1.0e-04
+    epochs: 40  # More epochs for smaller images
+    mask_ratio: 0.6
+    weight_decay: 0.03
+    warmup_epochs: 5
+    image_loss_weight: 1.0
+    mask_loss_weight: 1.0
+    supcon_loss_weight: 0.5
+    ssim_weight: 0.15
+    l1_weight: 0.85
+    supcon_temperature: 0.1
+    patience: 15
+    min_delta: 0.0001
+
+  finetune:
+    batch_size: 32  # Larger batch size
+    encoder_lr: 1.0e-05
+    head_lr: 0.001
+    epochs: 40  # More epochs
+    weight_decay: 0.02
+    warmup_epochs: 3
+    seg_loss_weight: 1.0
+    class_loss_weight: 1.0
+    seg_ssim_weight: 0.15
+    seg_l1_weight: 0.85
+    patience: 12
+    min_delta: 0.0001
+
+# Data loading - Can use more workers
+data_loading:
+  num_workers: 2
+  pin_memory: true
+  prefetch_factor: 2
+
+# Evaluation
+evaluation:
+  batch_size: 32
+
+# Hardware - Mixed precision not needed for small images
+mixed_precision: false
