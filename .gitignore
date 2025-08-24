@@ -233,4 +233,5 @@ MASK_UTILS_README.md
 LOSS_TUPLE_FIX.md
 IMAGE*.md
 validate*
-
+convnextV2/
+.vscode/
