@@ -294,13 +294,29 @@ class CelebDFDataset(Dataset):
         # Load ground truth mask if available
         if sample['mask_path'] is not None:
             gt_mask = Image.open(sample['mask_path']).convert('L')
-            gt_mask = transforms.Compose([
-                transforms.Resize(self.img_size),
-                transforms.ToTensor()
-            ])(gt_mask)
+            
+            # Log original size
+            orig_size = gt_mask.size
+            print(f"DEBUG: Loading GT mask from {sample['mask_path']}, original size: {orig_size}")
+            
+            # Get target size from config - should be 64x64
+            target_size = self.img_size
+            print(f"DEBUG: Target size from config: {target_size}")
+            
+            # Only resize if necessary
+            if orig_size != (target_size[1], target_size[0]):  # PIL uses (width, height)
+                print(f"DEBUG: Resizing GT mask from {orig_size} to {target_size}")
+                gt_mask = transforms.Resize(target_size, antialias=True)(gt_mask)
+            else:
+                print(f"DEBUG: GT mask already has correct size {orig_size}, no resize needed")
+            
+            # Convert to tensor
+            gt_mask = transforms.ToTensor()(gt_mask)
+            print(f"DEBUG: Final GT mask tensor shape: {gt_mask.shape} for {sample['image_path']}")
         else:
             # Create dummy mask for real images
             gt_mask = torch.zeros(1, H, W)
+            print(f"DEBUG: Created zero mask of shape: {gt_mask.shape} for real image")
         
         # Ensure image has correct dimensions [C, H, W]
         if len(masked_image.shape) != 3:
@@ -337,13 +353,29 @@ class CelebDFDataset(Dataset):
         # Load mask if available
         if sample['mask_path'] is not None:
             mask = Image.open(sample['mask_path']).convert('L')
-            mask = transforms.Compose([
-                transforms.Resize(self.img_size),
-                transforms.ToTensor()
-            ])(mask)
+            
+            # Log original size
+            orig_size = mask.size
+            print(f"DEBUG: Loading mask from {sample['mask_path']}, original size: {orig_size}")
+            
+            # Get target size from config - should be 64x64
+            target_size = self.img_size
+            print(f"DEBUG: Target size from config: {target_size}")
+            
+            # Only resize if necessary
+            if orig_size != (target_size[1], target_size[0]):  # PIL uses (width, height)
+                print(f"DEBUG: Resizing mask from {orig_size} to {target_size}")
+                mask = transforms.Resize(target_size, antialias=True)(mask)
+            else:
+                print(f"DEBUG: Mask already has correct size {orig_size}, no resize needed")
+            
+            # Convert to tensor
+            mask = transforms.ToTensor()(mask)
+            print(f"DEBUG: Final mask tensor shape: {mask.shape} for {sample['image_path']}")
         else:
             # Create dummy mask for real images
             mask = torch.zeros(1, H, W)
+            print(f"DEBUG: Created zero mask of shape: {mask.shape} for real image")
         
         # Ensure image has correct dimensions [C, H, W]
         if len(image_tensor.shape) != 3:

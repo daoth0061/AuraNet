@@ -79,7 +79,7 @@ def update_config_for_training(config_path, updates):
     return temp_config_path
 
 
-def run_single_gpu_training(config_path, data_root, mode, use_pretrained, pretrained_path, gpu_id=0):
+def run_single_gpu_training(config_path, data_root, mode, use_pretrained, pretrained_path, gpu_id=0, resume=False, checkpoint=None, mask_gt_dir=None):
     """Run single GPU training."""
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
@@ -94,6 +94,12 @@ def run_single_gpu_training(config_path, data_root, mode, use_pretrained, pretra
         '--pretrained_path', pretrained_path
     ]
     
+    if resume and checkpoint:
+        cmd.extend(['--resume', '--checkpoint', checkpoint])
+    
+    if mask_gt_dir:
+        cmd.extend(['--mask_gt_dir', mask_gt_dir])
+    
     print(f"Running single GPU training on GPU {gpu_id}")
     print(f"Command: {' '.join(cmd)}")
     
@@ -101,7 +107,7 @@ def run_single_gpu_training(config_path, data_root, mode, use_pretrained, pretra
     return result.returncode
 
 
-def run_multi_gpu_training(config_path, data_root, mode, use_pretrained, pretrained_path, num_gpus):
+def run_multi_gpu_training(config_path, data_root, mode, use_pretrained, pretrained_path, num_gpus, resume=False, checkpoint=None, mask_gt_dir=None):
     """Run multi-GPU training."""
     cmd = [
         sys.executable, 'train_celeb_df.py',
@@ -113,7 +119,82 @@ def run_multi_gpu_training(config_path, data_root, mode, use_pretrained, pretrai
         '--pretrained_path', pretrained_path
     ]
     
+    if resume and checkpoint:
+        cmd.extend(['--resume', '--checkpoint', checkpoint])
+    
+    if mask_gt_dir:
+        cmd.extend(['--mask_gt_dir', mask_gt_dir])
+    
     print(f"Running multi-GPU training on {num_gpus} GPUs")
+    print(f"Command: {' '.join(cmd)}")
+    
+    result = subprocess.run(cmd)
+    return result.returncode
+
+
+def run_single_gpu_optimized_training(config_path, data_root, mode, use_pretrained, pretrained_path, 
+                                    memory_optimization, enable_optimized_modules, gpu_id=0, 
+                                    resume=False, checkpoint=None, mask_gt_dir=None):
+    """Run single GPU optimized training."""
+    env = os.environ.copy()
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    
+    cmd = [
+        sys.executable, 'train_optimized.py',
+        '--config', config_path,
+        '--mode', mode,
+        '--data_root', data_root,
+        '--gpus', '1',
+        '--use_pretrained', use_pretrained,
+        '--pretrained_path', pretrained_path
+    ]
+    
+    if memory_optimization:
+        cmd.append('--memory_optimization')
+    
+    if enable_optimized_modules:
+        cmd.append('--enable_optimized_modules')
+    
+    if resume and checkpoint:
+        cmd.extend(['--resume', '--checkpoint', checkpoint])
+    
+    if mask_gt_dir:
+        cmd.extend(['--mask_gt_dir', mask_gt_dir])
+    
+    print(f"Running single GPU optimized training on GPU {gpu_id}")
+    print(f"Command: {' '.join(cmd)}")
+    
+    result = subprocess.run(cmd, env=env)
+    return result.returncode
+
+
+def run_multi_gpu_optimized_training(config_path, data_root, mode, use_pretrained, pretrained_path,
+                                   memory_optimization, enable_optimized_modules, num_gpus, 
+                                   resume=False, checkpoint=None, mask_gt_dir=None):
+    """Run multi-GPU optimized training."""
+    cmd = [
+        sys.executable, 'train_optimized.py',
+        '--config', config_path,
+        '--mode', mode,
+        '--data_root', data_root,
+        '--gpus', str(num_gpus),
+        '--use_pretrained', use_pretrained,
+        '--pretrained_path', pretrained_path
+    ]
+    
+    if memory_optimization:
+        cmd.append('--memory_optimization')
+    
+    if enable_optimized_modules:
+        cmd.append('--enable_optimized_modules')
+    
+    if resume and checkpoint:
+        cmd.extend(['--resume', '--checkpoint', checkpoint])
+    
+    if mask_gt_dir:
+        cmd.extend(['--mask_gt_dir', mask_gt_dir])
+    
+    print(f"Running multi-GPU optimized training on {num_gpus} GPUs")
     print(f"Command: {' '.join(cmd)}")
     
     result = subprocess.run(cmd)
@@ -131,6 +212,23 @@ def main():
                        help='Configuration file path')
     parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune', 'both'],
                        default='finetune', help='Training mode')
+    
+    # Model variant selection
+    parser.add_argument('--use_optimized', action='store_true',
+                       help='Use optimized AuraNet implementation (train_optimized.py)')
+    
+    # ConvNeXt V2 pretrained weights for spatial stream (different from full model checkpoint)
+    parser.add_argument('--use_pretrained', type=str, choices=['y', 'n', 'yes', 'no'],
+                       default='n', help='Use ConvNeXt V2 pretrained weights for spatial stream')
+    parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
+                       help='Path to ConvNeXt V2 pretrained weights file')
+    
+    # Full model checkpoint for resuming training
+    parser.add_argument('--resume', action='store_true',
+                       help='Resume training from full AuraNet checkpoint')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                       help='Path to full AuraNet model checkpoint to resume from')
+    
     parser.add_argument('--gpus', type=int, default=None,
                        help='Number of GPUs to use (auto-detect if not specified)')
     parser.add_argument('--gpu_ids', type=str, default=None,
@@ -141,16 +239,16 @@ def main():
                        help='Override learning rate')
     parser.add_argument('--epochs', type=int, default=None,
                        help='Override number of epochs')
-    parser.add_argument('--resume_from', type=str, default=None,
-                       help='Resume training from checkpoint')
     parser.add_argument('--analyze_only', action='store_true',
                        help='Only analyze dataset without training')
     parser.add_argument('--dry_run', action='store_true',
                        help='Show configuration and exit without training')
-    parser.add_argument('--use_pretrained', type=str, choices=['y', 'n', 'yes', 'no'],
-                       default='n', help='Use ConvNeXtV2 pretrained weights for spatial stream')
-    parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
-                       help='Path to ConvNeXtV2 pretrained weights file')
+    
+    # Optimized-specific options
+    parser.add_argument('--memory_optimization', action='store_true',
+                       help='Enable memory optimizations (only with --use_optimized)')
+    parser.add_argument('--enable_optimized_modules', action='store_true',
+                       help='Use optimized module implementations (only with --use_optimized)')
     
     args = parser.parse_args()
     
@@ -216,18 +314,16 @@ def main():
         if args.mode == 'finetune' or args.mode == 'both':
             config_updates['training.finetune.epochs'] = args.epochs
     
-    if args.resume_from is not None:
-        config_updates['checkpoint.resume_from'] = args.resume_from
+    if args.resume and args.checkpoint is not None:
+        config_updates['checkpoint.resume_from'] = args.checkpoint
     
     # Set data root in config
     config_updates['dataset.data_root'] = args.data_root
     
-    # Process pretrained weights arguments
+    # Process ConvNeXt V2 pretrained weights arguments
     use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
-    config_updates['model.use_pretrained'] = use_pretrained
-    config_updates['model.pretrained_path'] = args.pretrained_path
     
-    # Handle training mode logic for pretrained weights
+    # Handle training mode logic for ConvNeXt V2 pretrained weights
     if args.mode == 'both':
         # For 'both' mode, only use pretrained weights in pretraining stage
         config_updates['model.use_pretrained_pretrain'] = use_pretrained
@@ -236,6 +332,8 @@ def main():
         # For single mode, use pretrained weights if requested
         config_updates['model.use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
         config_updates['model.use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
+    
+    config_updates['model.pretrained_path'] = args.pretrained_path
     
     # Set mask GT directory (default to celeb-df-mask if not provided)
     if args.mask_gt_dir:
@@ -282,11 +380,25 @@ def main():
             # Run pre-training first, then fine-tuning
             print("Starting pre-training phase...")
             if effective_num_gpus > 1:
-                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'pretrain', 
-                                                args.use_pretrained, args.pretrained_path, effective_num_gpus)
+                if args.use_optimized:
+                    ret_code = run_multi_gpu_optimized_training(temp_config_path, args.data_root, 'pretrain', 
+                                                              args.use_pretrained, args.pretrained_path,
+                                                              args.memory_optimization, args.enable_optimized_modules,
+                                                              effective_num_gpus, args.resume, args.checkpoint, args.mask_gt_dir)
+                else:
+                    ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'pretrain', 
+                                                    args.use_pretrained, args.pretrained_path, 
+                                                    effective_num_gpus, args.resume, args.checkpoint, args.mask_gt_dir)
             else:
-                ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'pretrain',
-                                                 args.use_pretrained, args.pretrained_path)
+                if args.use_optimized:
+                    ret_code = run_single_gpu_optimized_training(temp_config_path, args.data_root, 'pretrain',
+                                                               args.use_pretrained, args.pretrained_path,
+                                                               args.memory_optimization, args.enable_optimized_modules,
+                                                               0, args.resume, args.checkpoint, args.mask_gt_dir)
+                else:
+                    ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'pretrain',
+                                                     args.use_pretrained, args.pretrained_path,
+                                                     0, args.resume, args.checkpoint, args.mask_gt_dir)
             
             if ret_code != 0:
                 print("Pre-training failed!")
@@ -294,19 +406,47 @@ def main():
             
             print("\nStarting fine-tuning phase...")
             if effective_num_gpus > 1:
-                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'finetune',
-                                                args.use_pretrained, args.pretrained_path, effective_num_gpus)
+                if args.use_optimized:
+                    ret_code = run_multi_gpu_optimized_training(temp_config_path, args.data_root, 'finetune',
+                                                              'n', args.pretrained_path,  # Don't use ConvNeXt pretrained for finetune
+                                                              args.memory_optimization, args.enable_optimized_modules,
+                                                              effective_num_gpus, False, None, args.mask_gt_dir)
+                else:
+                    ret_code = run_multi_gpu_training(temp_config_path, args.data_root, 'finetune',
+                                                    'n', args.pretrained_path,  # Don't use ConvNeXt pretrained for finetune
+                                                    effective_num_gpus, False, None, args.mask_gt_dir)
             else:
-                ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'finetune',
-                                                 args.use_pretrained, args.pretrained_path)
+                if args.use_optimized:
+                    ret_code = run_single_gpu_optimized_training(temp_config_path, args.data_root, 'finetune',
+                                                               'n', args.pretrained_path,  # Don't use ConvNeXt pretrained for finetune
+                                                               args.memory_optimization, args.enable_optimized_modules,
+                                                               0, False, None, args.mask_gt_dir)
+                else:
+                    ret_code = run_single_gpu_training(temp_config_path, args.data_root, 'finetune',
+                                                     'n', args.pretrained_path,  # Don't use ConvNeXt pretrained for finetune
+                                                     0, False, None, args.mask_gt_dir)
         else:
             # Run single mode
             if effective_num_gpus > 1:
-                ret_code = run_multi_gpu_training(temp_config_path, args.data_root, args.mode,
-                                                args.use_pretrained, args.pretrained_path, effective_num_gpus)
+                if args.use_optimized:
+                    ret_code = run_multi_gpu_optimized_training(temp_config_path, args.data_root, args.mode,
+                                                              args.use_pretrained, args.pretrained_path,
+                                                              args.memory_optimization, args.enable_optimized_modules,
+                                                              effective_num_gpus, args.resume, args.checkpoint, args.mask_gt_dir)
+                else:
+                    ret_code = run_multi_gpu_training(temp_config_path, args.data_root, args.mode,
+                                                    args.use_pretrained, args.pretrained_path,
+                                                    effective_num_gpus, args.resume, args.checkpoint, args.mask_gt_dir)
             else:
-                ret_code = run_single_gpu_training(temp_config_path, args.data_root, args.mode,
-                                                 args.use_pretrained, args.pretrained_path)
+                if args.use_optimized:
+                    ret_code = run_single_gpu_optimized_training(temp_config_path, args.data_root, args.mode,
+                                                               args.use_pretrained, args.pretrained_path,
+                                                               args.memory_optimization, args.enable_optimized_modules,
+                                                               0, args.resume, args.checkpoint, args.mask_gt_dir)
+                else:
+                    ret_code = run_single_gpu_training(temp_config_path, args.data_root, args.mode,
+                                                     args.use_pretrained, args.pretrained_path,
+                                                     0, args.resume, args.checkpoint, args.mask_gt_dir)
         
         return ret_code
     

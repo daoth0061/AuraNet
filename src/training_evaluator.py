@@ -175,8 +175,10 @@ class TrainingEvaluator:
                 ssim_val = ssim(pred_mask.unsqueeze(0), gt_mask.unsqueeze(0), 
                                data_range=1.0, size_average=True)
                 ssim_values.append(ssim_val.item())
+                
             except Exception as e:
                 self.logger.warning(f"SSIM calculation failed: {e}")
+                self.logger.warning(f"  pred_mask shape: {pred_mask.shape}, gt_mask shape: {gt_mask.shape}")
                 ssim_values.append(0.0)
         
         # Average metrics
@@ -226,9 +228,20 @@ class TrainingEvaluator:
                             if mask is not None:
                                 # Normalize to [0, 1]
                                 mask = mask.astype(np.float32) / 255.0
-                                # Resize to match prediction size 
+                                
+                                # Get target size from config
                                 target_size = tuple(self.config['img_size'])
-                                mask = cv2.resize(mask, target_size)
+                                print(f"DEBUG: Target size from config: {target_size}")
+                                
+                                # Check current size and only resize if necessary
+                                current_size = (mask.shape[1], mask.shape[0])  # width, height
+                                if current_size != target_size:
+                                    self.logger.info(f"Resizing GT mask from {current_size} to {target_size}")
+                                    mask = cv2.resize(mask, target_size)
+                                else:
+                                    self.logger.info(f"GT mask already has correct size {current_size}, no resize needed")
+                                
+                                self.logger.info(f"Final GT mask shape: {mask.shape} for {mask_path}")
                                 gt_masks.append(mask)
                             else:
                                 self.logger.warning(f"Failed to load mask: {mask_path}")

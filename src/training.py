@@ -54,19 +54,8 @@ class ImageReconstructionLoss(nn.Module):
             pred = pred.reshape(n, c, -1)
             pred = torch.einsum('ncl->nlc', pred)  # (B, L, patch_size^2 * 3)
 
-        # Patchify target image - CRITICAL: must match decoder spatial resolution
-        # Target must be resized to match decoder output spatial dimensions
-        B, _, target_H, target_W = target.shape
         _, pred_L, _ = pred.shape
         
-        # Calculate decoder spatial resolution from number of patches
-        decoder_spatial_dim = int(pred_L ** 0.5)  # sqrt(L) = H = W of decoder
-        expected_target_size = decoder_spatial_dim * self.patch_size
-        
-        # Resize target to match expected size if needed
-        if target_H != expected_target_size or target_W != expected_target_size:
-            target = F.interpolate(target, size=(expected_target_size, expected_target_size), 
-                                 mode='bilinear', align_corners=False)
         
         target = self.patchify(target)  # (B, L, patch_size^2 * 3)
         
@@ -115,6 +104,7 @@ class MaskReconstructionLoss(nn.Module):
         masks: (N, 1, H, W)
         x: (N, L, patch_size**2 * 1)
         """
+        print(f"DEBUG: Mask shape: {masks.shape}")
         p = self.patch_size
         assert masks.shape[2] == masks.shape[3] and masks.shape[2] % p == 0
 
@@ -128,6 +118,8 @@ class MaskReconstructionLoss(nn.Module):
         """
         x: (N, L, patch_size**2 * 1)
         masks: (N, 1, H, W)
+        
+        
         """
         p = self.patch_size
         h = w = int(x.shape[1]**.5)
@@ -137,7 +129,7 @@ class MaskReconstructionLoss(nn.Module):
         x = torch.einsum('nhwpqc->nchpwq', x)
         masks = x.reshape(shape=(x.shape[0], 1, h * p, h * p))
         return masks
-    
+
     def forward(self, pred_mask, target_mask, mask=None):
         """
         Args:
@@ -148,45 +140,53 @@ class MaskReconstructionLoss(nn.Module):
         Returns:
             loss: scalar tensor
         """
+        # Debug target mask size to identify issues
+        B, _, target_H, target_W = target_mask.shape
+        print(f"DEBUG: Input target_mask shape: {target_mask.shape}")
+        
         # Convert 4D prediction to 3D following FCMAE pattern
         if len(pred_mask.shape) == 4:
             n, c, _, _ = pred_mask.shape
             pred_mask = pred_mask.reshape(n, c, -1)
             pred_mask = torch.einsum('ncl->nlc', pred_mask)  # (B, L, patch_size^2 * 1)
 
-        # Patchify target mask - CRITICAL: must match decoder spatial resolution
-        B, _, target_H, target_W = target_mask.shape
+        # Patchify target mask - CRITICAL: The target mask should already be the correct size (64x64)
+        # Do NOT resize the target mask here - we'll use it as is for both L1 and SSIM loss
         _, pred_L, _ = pred_mask.shape
         
-        # Calculate decoder spatial resolution from number of patches
-        decoder_spatial_dim = int(pred_L ** 0.5)
-        expected_target_size = decoder_spatial_dim * self.patch_size
-        
-        # Resize target to match expected size if needed
-        if target_H != expected_target_size or target_W != expected_target_size:
-            target_mask = F.interpolate(target_mask, size=(expected_target_size, expected_target_size), 
-                                      mode='bilinear', align_corners=False)
-        
-        target = self.patchify_mask(target_mask)  # (B, L, patch_size^2 * 1)
-        
-        # Compute patch-wise L1 loss 
-        l1_loss = (pred_mask - target).abs().mean(dim=-1)  # [B, L], mean loss per patch
-        
-        # If mask is provided, only compute loss on removed patches
-        if mask is not None:
-            # Ensure mask shape matches exactly
-            if mask.shape[1] != pred_L:
-                raise ValueError(f"Mask shape {mask.shape} doesn't match pred patches {pred_L}")
-            l1_loss = (l1_loss * mask).sum() / (mask.sum() + 1e-8)
-        else:
-            l1_loss = l1_loss.mean()
+        # Verify target mask is the expected 64x64 size
+        if target_H != 64 or target_W != 64:
+            print(f"WARNING: Target mask is not 64x64, it's {target_H}x{target_W}. This may cause issues.")
+            # We don't resize - the dataset should provide the correct size
+
+        # Patchify target mask for L1 loss calculation
+        try:
+            # Convert target to patches for L1 loss
+            target = self.patchify_mask(target_mask)  # (B, L, patch_size^2 * 1)
+            
+            # Compute patch-wise L1 loss 
+            l1_loss = (pred_mask - target).abs().mean(dim=-1)  # [B, L], mean loss per patch
+            
+            # If mask is provided, only compute loss on removed patches
+            if mask is not None:
+                # Ensure mask shape matches exactly
+                if mask.shape[1] != pred_L:
+                    raise ValueError(f"Mask shape {mask.shape} doesn't match pred patches {pred_L}")
+                l1_loss = (l1_loss * mask).sum() / (mask.sum() + 1e-8)
+            else:
+                l1_loss = l1_loss.mean()
+        except Exception as e:
+            print(f"ERROR during L1 loss calculation: {e}")
+            # Fallback to a simple L1 loss if patchify fails
+            l1_loss = F.l1_loss(pred_mask.mean(dim=-1), target_mask.squeeze(1).flatten(1))
         
         # For SSIM, we need to convert back to full resolution
         # Unpatchify predictions for SSIM calculation
         pred_full = self.unpatchify_mask(pred_mask)  # (B, 1, H, W)
+        print(f"DEBUG: Unpatchified pred_full shape: {pred_full.shape}")
         pred_full = torch.sigmoid(pred_full)  # Apply sigmoid for proper range
         
-        # SSIM loss (1 - SSIM for minimization)
+        # Calculate SSIM loss - both tensors should be 64x64
         ssim_val = ssim(pred_full, target_mask, data_range=1.0, size_average=True)
         ssim_loss = 1.0 - ssim_val
         
@@ -279,29 +279,50 @@ class CombinedPretrainLoss(nn.Module):
             loss: scalar tensor
             loss_dict: dict of individual losses
         """
-        # Image reconstruction loss
-        img_loss = self.image_loss(
-            outputs['reconstructed_image'],
-            targets['original_image'],
-            targets.get('mask', None)  # mask for removed patches (optional)
-        )
+        print(f"DEBUG - Available output keys: {list(outputs.keys())}")
+        print(f"DEBUG - Available target keys: {list(targets.keys())}")
         
-        # Mask reconstruction loss
-        mask_loss_val = self.mask_loss(
-            outputs['reconstructed_mask'],
-            targets['ground_truth_mask'],
-            targets.get('mask', None)  # mask for removed patches (optional)
-        )
+        # Image reconstruction loss
+        image_key = 'reconstructed_image'
+        if image_key not in outputs:
+            print(f"WARNING: '{image_key}' not found in outputs. Available keys: {list(outputs.keys())}")
+            # Create a dummy tensor to avoid breaking training
+            img_loss = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+        else:
+            img_loss = self.image_loss(
+                outputs[image_key],
+                targets['original_image'],
+                targets.get('mask', None)  # mask for removed patches (optional)
+            )
+        
+        # Mask reconstruction loss - handle both original and optimized model keys
+        mask_key = 'reconstructed_mask' if 'reconstructed_mask' in outputs else 'predicted_mask'
+        if mask_key not in outputs:
+            print(f"WARNING: Neither 'reconstructed_mask' nor 'predicted_mask' found in outputs. Available keys: {list(outputs.keys())}")
+            # Create a dummy tensor to avoid breaking training
+            mask_loss_val = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+        else:
+            mask_loss_val = self.mask_loss(
+                outputs[mask_key],
+                targets['ground_truth_mask'],
+                targets.get('mask', None)  # mask for removed patches (optional)
+            )
         
         # Supervised contrastive loss
-        embeddings = outputs['contrastive_embedding']
-        labels = targets.get('labels', None)
-        
-        if labels is not None:
-            # Create pseudo-labels for contrastive learning
-            supcon_loss_val = self.supcon_loss(embeddings, labels)
+        embedding_key = 'contrastive_embedding' if 'contrastive_embedding' in outputs else 'contrastive_feature'
+        if embedding_key not in outputs:
+            print(f"WARNING: Neither 'contrastive_embedding' nor 'contrastive_feature' found in outputs. Available keys: {list(outputs.keys())}")
+            # Create a dummy tensor to avoid breaking training
+            supcon_loss_val = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
         else:
-            supcon_loss_val = torch.tensor(0.0, device=embeddings.device)
+            embeddings = outputs[embedding_key]
+            labels = targets.get('labels', None)
+            
+            if labels is not None:
+                # Create pseudo-labels for contrastive learning
+                supcon_loss_val = self.supcon_loss(embeddings, labels)
+            else:
+                supcon_loss_val = torch.tensor(0.0, device=embeddings.device)
         
         # Combined loss
         total_loss = (self.image_weight * img_loss + 

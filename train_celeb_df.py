@@ -99,14 +99,14 @@ class DistributedTrainer:
     
     def _create_model(self):
         """Create and setup the model."""
-        # Determine if we should use pretrained weights for current mode
+        # Determine if we should use ConvNeXt V2 pretrained weights for current mode
         use_pretrained = False
         if self.mode == 'pretrain':
             use_pretrained = self.config['model'].get('use_pretrained_pretrain', False)
         elif self.mode == 'finetune':
             use_pretrained = self.config['model'].get('use_pretrained_finetune', False)
         
-        # Create model with pretrained weights if specified
+        # Create model with ConvNeXt V2 pretrained weights if specified
         model = create_auranet(
             config=self.config,
             use_pretrained=use_pretrained,
@@ -685,10 +685,23 @@ def main():
                        help='Root directory of Celeb-DF dataset')
     parser.add_argument('--gpus', type=int, default=None,
                        help='Number of GPUs to use (auto-detect if not specified)')
+    
+    # ConvNeXt V2 pretrained weights for spatial stream (different from full model checkpoint)
     parser.add_argument('--use_pretrained', type=str, choices=['y', 'n', 'yes', 'no'],
-                       default='n', help='Use ConvNeXtV2 pretrained weights for spatial stream')
+                       default='n', help='Use ConvNeXt V2 pretrained weights for spatial stream')
     parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
-                       help='Path to ConvNeXtV2 pretrained weights file')
+                       help='Path to ConvNeXt V2 pretrained weights file')
+    
+    # Full model checkpoint for resuming training
+    parser.add_argument('--resume', action='store_true',
+                       help='Resume training from full AuraNet checkpoint')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                       help='Path to full AuraNet model checkpoint to resume from')
+    
+    # Evaluation
+    parser.add_argument('--mask_gt_dir', type=str, default=None,
+                       help='Directory containing ground truth masks for evaluation')
+    
     parser.add_argument('--kaggle', action='store_true',
                        help='Enable Kaggle environment adaptations')
     parser.add_argument('--kaggle_working_dir', type=str, default='/kaggle/working/AuraNet',
@@ -752,10 +765,33 @@ def main():
     # Update data root in config
     config['dataset']['data_root'] = args.data_root
     
-    # Process pretrained weights arguments
+    # Process ConvNeXt V2 pretrained weights arguments
     use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
-    config['model']['use_pretrained'] = use_pretrained
+    if 'model' not in config:
+        config['model'] = {}
+    
+    # Handle training mode logic for ConvNeXt V2 pretrained weights
+    if args.mode == 'both':
+        # For 'both' mode, only use pretrained weights in pretraining stage
+        config['model']['use_pretrained_pretrain'] = use_pretrained
+        config['model']['use_pretrained_finetune'] = False
+    else:
+        # For single mode, use pretrained weights if requested
+        config['model']['use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
+        config['model']['use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
+    
     config['model']['pretrained_path'] = args.pretrained_path
+    
+    # Set mask GT directory for evaluation
+    if args.mask_gt_dir:
+        if 'evaluation' not in config:
+            config['evaluation'] = {}
+        config['evaluation']['mask_gt_dir'] = args.mask_gt_dir
+    else:
+        # Default to the standard celeb-df-mask directory
+        if 'evaluation' not in config:
+            config['evaluation'] = {}
+        config['evaluation']['mask_gt_dir'] = 'celeb-df-mask'
     
     # Handle training mode logic
     if args.mode == 'both':

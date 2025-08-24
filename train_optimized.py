@@ -1,293 +1,894 @@
 """
-AuraNet Optimized Training Script
-Uses the optimized implementations for faster training
+Optimized Distributed Training Script for AuraNet on Celeb-DF Dataset
+Supports multi-GPU training with optimized implementations
 """
 
-import argparse
 import os
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.distributed as dist
-import yaml
-import time
 import sys
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
+import yaml
+import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
+import numpy as np
+import random
+import shutil
+import gc
+from typing import Dict, Optional, Tuple, List
+import wandb
+from tensorboardX import SummaryWriter
 
 # Add src directory to path
 sys.path.append(str(Path(__file__).parent / 'src'))
 
-# Import logging utilities
-from src.logging_utils import setup_logging, get_logger
+from auranet_optimized import create_optimized_auranet
+from celeb_df_dataset import CelebDFDataset
+from training import (CombinedPretrainLoss, CombinedFinetuneLoss, 
+                     get_optimizer, get_scheduler)
+from training_evaluator import TrainingEvaluator
 
-# Get logger instance
-logger = get_logger(__name__)
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='AuraNet Optimized Training')
+class DistributedTrainer:
+    """Distributed trainer for AuraNet on Celeb-DF dataset."""
     
-    # Basic arguments
-    parser.add_argument('--config', type=str, default='config_celeb_df_memory_optimized.yaml',
-                        help='Path to the config file')
-    parser.add_argument('--data_root', type=str, default=None,
-                        help='Root directory for dataset (overrides config)')
-    parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune', 'both'], default='pretrain',
-                        help='Training mode')
-    parser.add_argument('--use_pretrained', type=str, choices=['yes', 'no'], default='yes',
-                        help='Whether to use pretrained weights')
-    parser.add_argument('--pretrained_path', type=str, default=None,
-                        help='Path to pretrained model')
-    parser.add_argument('--batch_size', type=int, default=None,
-                        help='Batch size (overrides config)')
-    
-    # Performance optimization
-    parser.add_argument('--gpus', type=int, default=1,
-                        help='Number of GPUs to use')
-    parser.add_argument('--memory_optimization', action='store_true',
-                        help='Enable memory optimizations')
-    parser.add_argument('--enable_optimized_modules', action='store_true',
-                        help='Use optimized module implementations')
-    
-    # Kaggle-specific arguments
-    parser.add_argument('--kaggle', action='store_true',
-                        help='Running in Kaggle environment')
-    parser.add_argument('--kaggle_working_dir', type=str, default=None,
-                        help='Working directory for Kaggle')
-    
-    # Continue training
-    parser.add_argument('--resume', action='store_true',
-                        help='Resume training from checkpoint')
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Path to checkpoint to resume from')
-    
-    args = parser.parse_args()
-    return args
-
-def is_kaggle_environment() -> bool:
-    """Check if running in Kaggle environment."""
-    return os.path.exists('/kaggle/working')
-
-def setup_kaggle_environment(working_dir: str) -> None:
-    """Setup environment for Kaggle."""
-    logger.info(f"Setting up Kaggle environment in {working_dir}")
-    # Add current directory to path
-    sys.path.append(working_dir)
-    # Add src directory to path
-    sys.path.append(os.path.join(working_dir, 'src'))
-
-def load_config(config_path):
-    """Load configuration from YAML file."""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
-
-def setup_distributed(args, config):
-    """Set up distributed training."""
-    if args.gpus > 1:
-        if not config['distributed']['enabled']:
-            logger.warning("Distributed training not enabled in config, but multiple GPUs requested")
-            config['distributed']['enabled'] = True
-            
-        # Initialize process group
-        if torch.cuda.is_available():
-            logger.info(f"Initializing distributed training with {args.gpus} GPUs")
-            torch.cuda.set_device(args.local_rank)
-            dist.init_process_group(backend=config['distributed']['backend'])
-            config['distributed']['world_size'] = dist.get_world_size()
-            config['distributed']['rank'] = dist.get_rank()
-            logger.info(f"Process group initialized: rank {config['distributed']['rank']} of {config['distributed']['world_size']}")
-        else:
-            logger.warning("CUDA not available, falling back to CPU")
-            args.gpus = 0
-            config['distributed']['enabled'] = False
-
-def create_model(config, args):
-    """Create the optimized AuraNet model."""
-    try:
-        # Try to import the optimized implementation first
-        from src.auranet_optimized import create_optimized_auranet
-        logger.info("Using optimized AuraNet implementation")
+    def __init__(self, rank: int, world_size: int, config: Dict, mode: str):
+        self.rank = rank
+        self.world_size = world_size
+        self.config = config
+        self.mode = mode
+        self.device = torch.device(f'cuda:{rank}')
         
-        # Create model
+        # Setup logging
+        self._setup_logging()
+        
+        # Setup reproducibility
+        self._setup_seed()
+        
+        # Initialize model
+        self.model = self._create_model()
+        
+        # Setup data loaders
+        self.train_loader, self.val_loader = self._setup_data_loaders()
+        
+        # Setup training components
+        self.criterion = self._setup_criterion()
+        self.optimizer = self._setup_optimizer()
+        self.scheduler = self._setup_scheduler()
+        
+        # Setup evaluation
+        mask_gt_dir = self.config.get('evaluation', {}).get('mask_gt_dir', None)
+        self.evaluator = TrainingEvaluator(config=self.config, mask_gt_dir=mask_gt_dir, device=self.device)
+        
+        # Setup logging and checkpointing
+        self.writer = None
+        if self.rank == 0:
+            self._setup_logging_tools()
+        
+        # Training state
+        self.epoch = 0
+        self.global_step = 0
+        self.best_metric = 0.0
+        self.patience_counter = 0
+        
+    def _setup_logging(self):
+        """Setup logging configuration."""
+        log_level = logging.INFO if self.rank == 0 else logging.WARNING
+        logging.basicConfig(
+            level=log_level,
+            format=f'[Rank {self.rank}] %(asctime)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+        
+    def _setup_seed(self):
+        """Setup random seeds for reproducibility."""
+        seed = self.config.get('seed', 42) + self.rank
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        
+        if self.config.get('deterministic', False):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+    
+    def _create_model(self):
+        """Create and setup the model."""
+        # Determine if we should use ConvNeXt V2 pretrained weights for current mode
+        use_pretrained = False
+        if self.mode == 'pretrain':
+            use_pretrained = self.config['model'].get('use_pretrained_pretrain', False)
+        elif self.mode == 'finetune':
+            use_pretrained = self.config['model'].get('use_pretrained_finetune', False)
+        
+        # Create model with ConvNeXt V2 pretrained weights if specified
         model = create_optimized_auranet(
-            config=config,
-            use_pretrained=(args.use_pretrained == 'yes'),
-            pretrained_path=args.pretrained_path
+            config=self.config,
+            use_pretrained=use_pretrained,
+            pretrained_path=self.config['model'].get('pretrained_path', None)
+        )
+        model = model.to(self.device)
+        
+        # Enable mixed precision support - ensure model parameters are in correct dtype
+        if self.config.get('mixed_precision', False):
+            # Convert model to half precision for mixed precision training
+            # This is important for compatibility with pretrained weights
+            model = model.half() if self.config.get('full_half_precision', False) else model
+        
+        # Wrap with DDP only if using multiple GPUs
+        if self.world_size > 1:
+            model = DDP(model, device_ids=[self.rank], find_unused_parameters=True)
+        
+        # Enable mixed precision if configured
+        if self.config.get('mixed_precision', False):
+            try:
+                # New API for PyTorch 2.0+
+                self.scaler = torch.amp.GradScaler('cuda')
+            except AttributeError:
+                # Fallback to old API
+                self.scaler = torch.cuda.amp.GradScaler()
+        else:
+            self.scaler = None
+            
+        # Compile model if configured (PyTorch 2.0+) - disabled for Windows compatibility
+        if self.config.get('compile_model', False):
+            self.logger.warning("torch.compile() disabled for Windows/Triton compatibility")
+            # model = torch.compile(model)  # Disabled
+            
+        return model
+    
+    def _setup_data_loaders(self):
+        """Setup distributed data loaders."""
+        mode = self.mode
+        
+        # Create datasets
+        self.logger.info(f"Creating datasets with data_root: {self.config['dataset']['data_root']}")
+        
+        train_dataset = CelebDFDataset(
+            data_root=self.config['dataset']['data_root'],
+            mode=mode,
+            split='train',
+            config=self.config
         )
         
-        return model
-    except ImportError:
-        # Fall back to standard implementation
-        logger.warning("Optimized implementation not found, falling back to standard AuraNet")
-        from src.auranet import create_auranet
-        
-        # Create model
-        model = create_auranet(
-            config=config,
-            use_pretrained=(args.use_pretrained == 'yes'),
-            pretrained_path=args.pretrained_path
+        val_dataset = CelebDFDataset(
+            data_root=self.config['dataset']['data_root'],
+            mode=mode,
+            split='test',  # Use test split for validation
+            config=self.config
         )
         
-        return model
-
-def create_data_loaders(config, args):
-    """Create data loaders for training and validation."""
-    try:
-        from src.data_loader import create_dataloaders
+        self.logger.info(f"Train dataset size: {len(train_dataset)}")
+        self.logger.info(f"Val dataset size: {len(val_dataset)}")
         
-        # Override batch size if specified
-        if args.batch_size is not None:
-            logger.info(f"Overriding batch size to {args.batch_size}")
-            if args.mode == 'pretrain' or args.mode == 'both':
-                config['training']['pretrain']['batch_size'] = args.batch_size
-            if args.mode == 'finetune' or args.mode == 'both':
-                config['training']['finetune']['batch_size'] = args.batch_size
+        if len(train_dataset) == 0:
+            self.logger.error(f"Training dataset is empty! Check data_root: {self.config['dataset']['data_root']}")
+            raise ValueError(f"No training data found in {self.config['dataset']['data_root']}")
         
-        # Override data root if specified
-        if args.data_root is not None:
-            logger.info(f"Overriding data root to {args.data_root}")
-            config['dataset']['data_root'] = args.data_root
+        # Create distributed samplers
+        train_sampler = DistributedSampler(
+            train_dataset, 
+            num_replicas=self.world_size, 
+            rank=self.rank,
+            shuffle=True
+        )
+        
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            shuffle=False
+        )
+        
+        # Get batch size based on mode
+        if mode == 'pretrain':
+            batch_size = self.config['training']['pretrain']['batch_size']
+        else:
+            batch_size = self.config['training']['finetune']['batch_size']
+        
+        self.logger.info(f"Using batch size: {batch_size}")
+        
+        # Data loading parameters
+        data_config = self.config['data_loading']
         
         # Create data loaders
-        train_loader, val_loader = create_dataloaders(config)
-        
-        return train_loader, val_loader
-    except ImportError:
-        logger.error("Failed to import data loader, make sure src/data_loader.py exists")
-        sys.exit(1)
-
-def train_model(model, train_loader, val_loader, config, args):
-    """Train the model using the specified mode."""
-    try:
-        from src.training import AuraNetTrainer
-        
-        # Create trainer
-        trainer = AuraNetTrainer(
-            model=model,
-            config=config,
-            distributed=(args.gpus > 1),
-            rank=config['distributed'].get('rank', 0) if args.gpus > 1 else 0
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=train_sampler,
+            num_workers=data_config['num_workers'],
+            pin_memory=data_config['pin_memory'],
+            drop_last=data_config['drop_last'],
+            prefetch_factor=data_config.get('prefetch_factor', 2),
+            persistent_workers=data_config.get('persistent_workers', True)
         )
         
-        # Start time
-        start_time = time.time()
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            sampler=val_sampler,
+            num_workers=data_config['num_workers'],
+            pin_memory=data_config['pin_memory'],
+            prefetch_factor=data_config.get('prefetch_factor', 2),
+            persistent_workers=data_config.get('persistent_workers', True)
+        )
         
-        # Resume training if requested
-        if args.resume and args.checkpoint:
-            logger.info(f"Resuming training from checkpoint: {args.checkpoint}")
-            trainer.load_checkpoint(args.checkpoint)
+        self.logger.info(f"Created train_loader with {len(train_loader)} batches")
+        self.logger.info(f"Created val_loader with {len(val_loader)} batches")
         
-        # Train based on mode
-        if args.mode == 'pretrain' or args.mode == 'both':
-            logger.info("Starting pre-training")
-            trainer.pretrain(train_loader, val_loader)
-            
-        if args.mode == 'finetune' or args.mode == 'both':
-            logger.info("Starting fine-tuning")
-            trainer.finetune(train_loader, val_loader)
-        
-        # End time
-        end_time = time.time()
-        total_time = end_time - start_time
-        logger.info(f"Training completed in {total_time:.2f} seconds ({total_time/3600:.2f} hours)")
-        
-        return trainer
-    except ImportError:
-        logger.error("Failed to import trainer, make sure src/training.py exists")
-        sys.exit(1)
-
-def optimize_config(config, args):
-    """Apply optimization settings to config."""
-    if args.memory_optimization:
-        logger.info("Applying memory optimizations to config")
-        
-        # Ensure memory_optimization section exists
-        if 'memory_optimization' not in config:
-            config['memory_optimization'] = {}
-            
-        # Apply optimizations
-        config['memory_optimization']['gradient_checkpointing'] = True
-        config['memory_optimization']['flash_attention'] = True
-        config['memory_optimization']['periodic_cache_clearing'] = True
-        config['memory_optimization']['enable_channels_last'] = True
-        config['memory_optimization']['enable_cudnn_autotuner'] = True
-        
-    if args.enable_optimized_modules:
-        logger.info("Enabling optimized module implementations")
-        config['memory_optimization']['use_optimized_modules'] = True
-        
-    # Enable mixed precision by default
-    config['mixed_precision'] = True
+        return train_loader, val_loader
     
-    return config
+    def _setup_criterion(self):
+        """Setup loss function."""
+        mode = self.mode
+        
+        if mode == 'pretrain':
+            return CombinedPretrainLoss(config=self.config)
+        else:
+            return CombinedFinetuneLoss(config=self.config)
+    
+    def _setup_optimizer(self):
+        """Setup optimizer."""
+        return get_optimizer(self.model, mode=self.mode, config=self.config)
+    
+    def _setup_scheduler(self):
+        """Setup learning rate scheduler."""
+        return get_scheduler(self.optimizer, mode=self.mode, config=self.config)
+    
+    def _setup_logging_tools(self):
+        """Setup tensorboard and wandb logging (only on rank 0)."""
+        # Setup tensorboard
+        if self.config['logging']['tensorboard']:
+            log_dir = Path(self.config['logging']['log_dir'])
+            log_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.writer = SummaryWriter(log_dir / f'run_{timestamp}')
+        
+        # Setup wandb
+        if self.config['logging']['wandb']['enabled']:
+            wandb.init(
+                project=self.config['logging']['wandb']['project'],
+                entity=self.config['logging']['wandb'].get('entity'),
+                config=self.config,
+                name=f"auranet_optimized_celeb_df_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+        
+        # Note: AuraNetEvaluator is for inference only, not needed during training
+    
+    def train_epoch(self) -> Dict[str, float]:
+        """Train for one epoch."""
+        self.model.train()
+        self.train_loader.sampler.set_epoch(self.epoch)
+        
+        total_loss = 0.0
+        num_batches = len(self.train_loader)
+        log_freq = self.config['logging']['log_freq']
+        
+        # Check if we have any batches
+        if num_batches == 0:
+            self.logger.error("Training data loader is empty! Please check your dataset.")
+            raise ValueError("No training data available. Check dataset path and annotations.")
+        
+        self.logger.info(f"Starting epoch {self.epoch} with {num_batches} batches")
+        
+        for batch_idx, batch in enumerate(self.train_loader):
+            # Move batch to device
+            batch = {k: v.to(self.device) if torch.is_tensor(v) else v 
+                    for k, v in batch.items()}
+            
+            # Forward pass
+            self.optimizer.zero_grad()
+            
+            if self.scaler is not None:
+                # Mixed precision training
+                try:
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        outputs = self.model(batch['image'], mode=self.mode)
+                        loss_tuple = self.criterion(outputs, batch)
+                        # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                        if isinstance(loss_tuple, tuple):
+                            loss = loss_tuple[0]  # Main loss
+                            loss_dict = loss_tuple[1] if len(loss_tuple) > 1 else None
+                        else:
+                            loss = loss_tuple
+                            loss_dict = None
+                except AttributeError:
+                    with torch.cuda.amp.autocast():
+                        outputs = self.model(batch['image'], mode=self.mode)
+                        loss_tuple = self.criterion(outputs, batch)
+                        # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                        if isinstance(loss_tuple, tuple):
+                            loss = loss_tuple[0]  # Main loss
+                            loss_dict = loss_tuple[1] if len(loss_tuple) > 1 else None
+                        else:
+                            loss = loss_tuple
+                            loss_dict = None
+                
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                # Regular training
+                outputs = self.model(batch['image'], mode=self.mode)
+                loss_tuple = self.criterion(outputs, batch)
+                # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                if isinstance(loss_tuple, tuple):
+                    loss = loss_tuple[0]  # Main loss
+                    loss_dict = loss_tuple[1] if len(loss_tuple) > 1 else None
+                else:
+                    loss = loss_tuple
+                    loss_dict = None
+                loss.backward()
+                self.optimizer.step()
+            
+            total_loss += loss.item()
+            self.global_step += 1
+            
+            # MEMORY OPTIMIZATION: Clear intermediate variables and cache periodically
+            if batch_idx % 50 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Logging
+            if self.rank == 0 and batch_idx % log_freq == 0:
+                self.logger.info(
+                    f'Epoch: {self.epoch}, Batch: {batch_idx}/{num_batches}, '
+                    f'Loss: {loss.item():.6f}, LR: {self.optimizer.param_groups[0]["lr"]:.2e}'
+                )
+                
+                if self.writer is not None:
+                    self.writer.add_scalar('train/loss', loss.item(), self.global_step)
+                    self.writer.add_scalar('train/lr', self.optimizer.param_groups[0]['lr'], self.global_step)
+                
+                if self.config['logging']['wandb']['enabled']:
+                    wandb.log({
+                        'train/loss': loss.item(),
+                        'train/lr': self.optimizer.param_groups[0]['lr'],
+                        'global_step': self.global_step
+                    })
+        
+        avg_loss = total_loss / num_batches
+        return {'train_loss': avg_loss}
+    
+    def validate_epoch(self) -> Dict[str, float]:
+        """Validate for one epoch with comprehensive evaluation."""
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = len(self.val_loader)
+        
+        all_predictions = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for batch in self.val_loader:
+                # Move batch to device
+                batch = {k: v.to(self.device) if torch.is_tensor(v) else v 
+                        for k, v in batch.items()}
+                
+                # Forward pass
+                if self.scaler is not None:
+                    try:
+                        with torch.autocast(device_type='cuda', dtype=torch.float16):
+                            outputs = self.model(batch['image'], mode=self.mode)
+                            loss_tuple = self.criterion(outputs, batch)
+                            # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                            if isinstance(loss_tuple, tuple):
+                                loss = loss_tuple[0]  # Main loss
+                                loss_dict = loss_tuple[1] if len(loss_tuple) > 1 else None
+                            else:
+                                loss = loss_tuple
+                                loss_dict = None
+                    except AttributeError:
+                        with torch.cuda.amp.autocast():
+                            outputs = self.model(batch['image'], mode=self.mode)
+                            loss_tuple = self.criterion(outputs, batch)
+                            # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                            if isinstance(loss_tuple, tuple):
+                                loss = loss_tuple[0]  # Main loss
+                                loss_dict = loss_tuple[1] if len(loss_tuple) > 1 else None
+                            else:
+                                loss = loss_tuple
+                                loss_dict = None
+                else:
+                    outputs = self.model(batch['image'], mode=self.mode)
+                    loss_tuple = self.criterion(outputs, batch)
+                    # Unpack if it's a tuple (CombinedPretrainLoss returns tuple)
+                    if isinstance(loss_tuple, tuple):
+                        loss = loss_tuple[0]  # Main loss
+                        loss_dict = loss_tuple[1] if len(loss_tuple) > 1 else None
+                    else:
+                        loss = loss_tuple
+                        loss_dict = None
+                
+                total_loss += loss.item()
+                
+                # Collect predictions for basic metrics
+                if 'classification_logits' in outputs:
+                    all_predictions.append(outputs['classification_logits'].detach().cpu())
+                    all_labels.append(batch['label'].detach().cpu())
+        
+        avg_loss = total_loss / num_batches
+        metrics = {'val_loss': avg_loss}
+        
+        # Basic accuracy for backward compatibility
+        if all_predictions and self.rank == 0:
+            all_predictions = torch.cat(all_predictions, dim=0)
+            all_labels = torch.cat(all_labels, dim=0)
+            
+            # Calculate basic accuracy
+            predicted_labels = torch.argmax(all_predictions, dim=1)
+            accuracy = (predicted_labels == all_labels).float().mean().item()
+            metrics['accuracy'] = accuracy
+        
+        # Comprehensive evaluation using TrainingEvaluator
+        if self.rank == 0 and hasattr(self, 'evaluator'):
+            try:
+                eval_metrics = self.evaluator.evaluate_epoch(self.model, self.val_loader, self.mode)
+                metrics.update(eval_metrics)
+                
+                # Log detailed metrics
+                self.evaluator.log_metrics(eval_metrics, self.epoch, 'validation')
+                
+            except Exception as e:
+                self.logger.warning(f"Comprehensive evaluation failed: {e}")
+        
+        # MEMORY OPTIMIZATION: CPU Offloading after validation
+        # Clear CUDA cache to free up memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Force garbage collection
+            gc.collect()
+        
+        return metrics
+    
+    def save_checkpoint(self, metrics: Dict[str, float], is_best: bool = False):
+        """Save model checkpoint (only on rank 0)."""
+        if self.rank != 0:
+            return
+        
+        checkpoint_dir = Path(self.config['checkpoint']['save_dir'])
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        checkpoint = {
+            'epoch': self.epoch,
+            'global_step': self.global_step,
+            'model_state_dict': self.model.module.state_dict() if self.world_size > 1 else self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'metrics': metrics,
+            'config': self.config,
+            'best_metric': self.best_metric
+        }
+        
+        if self.scaler is not None:
+            checkpoint['scaler_state_dict'] = self.scaler.state_dict()
+        
+        # Save regular checkpoint
+        checkpoint_path = checkpoint_dir / f'checkpoint_epoch_{self.epoch}.pth'
+        torch.save(checkpoint, checkpoint_path)
+        
+        # Save best checkpoint
+        if is_best:
+            best_path = checkpoint_dir / 'best_model.pth'
+            torch.save(checkpoint, best_path)
+            self.logger.info(f'New best model saved with metric: {self.best_metric:.6f}')
+        
+        # Keep only recent checkpoints
+        self._cleanup_checkpoints(checkpoint_dir)
+    
+    def _cleanup_checkpoints(self, checkpoint_dir: Path, keep_last: int = 3):
+        """Keep only the last N checkpoints."""
+        checkpoints = list(checkpoint_dir.glob('checkpoint_epoch_*.pth'))
+        checkpoints.sort(key=lambda x: int(x.stem.split('_')[-1]))
+        
+        while len(checkpoints) > keep_last:
+            oldest = checkpoints.pop(0)
+            oldest.unlink()
+    
+    def train(self):
+        """Main training loop."""
+        mode = self.mode
+        
+        # Get training configuration
+        if mode == 'pretrain':
+            train_config = self.config['training']['pretrain']
+            num_epochs = train_config['epochs']
+            patience = train_config['patience']
+            min_delta = train_config['min_delta']
+        else:
+            train_config = self.config['training']['finetune']
+            num_epochs = train_config['epochs']
+            patience = train_config['patience']
+            min_delta = train_config['min_delta']
+        
+        self.logger.info(f'Starting {mode} training for {num_epochs} epochs')
+        
+        for epoch in range(num_epochs):
+            self.epoch = epoch
+            
+            # Train
+            train_metrics = self.train_epoch()
+            
+            # Validate
+            val_metrics = self.validate_epoch()
+            
+            # Step scheduler
+            self.scheduler.step()
+            
+            # Combine metrics
+            metrics = {**train_metrics, **val_metrics}
+            
+            # Check for improvement (using accuracy or AUC)
+            current_metric = val_metrics.get('accuracy', val_metrics.get('auc', val_metrics['val_loss']))
+            is_best = False
+            
+            if mode == 'finetune' and 'accuracy' in val_metrics:
+                # For fine-tuning, higher accuracy is better
+                if current_metric > self.best_metric + min_delta:
+                    self.best_metric = current_metric
+                    is_best = True
+                    self.patience_counter = 0
+                else:
+                    self.patience_counter += 1
+            elif mode == 'pretrain':
+                # For pre-training, lower loss is better
+                current_metric = -val_metrics['val_loss']  # Negative for consistency
+                if current_metric > self.best_metric + min_delta:
+                    self.best_metric = current_metric
+                    is_best = True
+                    self.patience_counter = 0
+                else:
+                    self.patience_counter += 1
+            
+            # Log metrics
+            if self.rank == 0:
+                self.logger.info(
+                    f'Epoch {epoch}: Train Loss: {train_metrics["train_loss"]:.6f}, '
+                    f'Val Loss: {val_metrics["val_loss"]:.6f}, '
+                    f'Current Metric: {current_metric:.6f}, Best: {self.best_metric:.6f}'
+                )
+                
+                if self.writer is not None:
+                    for key, value in metrics.items():
+                        self.writer.add_scalar(f'epoch/{key}', value, epoch)
+                
+                if self.config['logging']['wandb']['enabled']:
+                    wandb.log({**{f'epoch/{k}': v for k, v in metrics.items()}, 'epoch': epoch})
+            
+            # Save checkpoint
+            self.save_checkpoint(metrics, is_best)
+            
+            # Early stopping
+            if self.patience_counter >= patience:
+                self.logger.info(f'Early stopping triggered after {patience} epochs without improvement')
+                break
+        
+        if self.rank == 0:
+            self.logger.info(f'Training completed. Best metric: {self.best_metric:.6f}')
+            
+            # Close logging tools
+            if self.writer is not None:
+                self.writer.close()
+            
+            if self.config['logging']['wandb']['enabled']:
+                wandb.finish()
+
+
+def setup_distributed(rank: int, world_size: int, backend: str = 'nccl'):
+    """Setup distributed training environment."""
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize the process group
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+    
+    # Set CUDA device
+    torch.cuda.set_device(rank)
+
+
+def cleanup_distributed():
+    """Cleanup distributed training environment."""
+    dist.destroy_process_group()
+
+
+def main_worker(rank: int, world_size: int, config: Dict, mode: str):
+    """Main worker function for distributed training."""
+    try:
+        # Setup distributed training
+        setup_distributed(rank, world_size, config['distributed']['backend'])
+        
+        # Create trainer
+        trainer = DistributedTrainer(rank, world_size, config, mode)
+        
+        # Start training
+        trainer.train()
+        
+    except Exception as e:
+        logging.error(f"Error in worker {rank}: {str(e)}")
+        raise
+    finally:
+        # Cleanup
+        cleanup_distributed()
+
+
+def setup_kaggle_environment(working_dir: str) -> None:
+    """
+    Setup the Kaggle environment by copying necessary files to the working directory.
+    
+    Args:
+        working_dir: The working directory on Kaggle
+    """
+    print("🚀 Setting up Kaggle environment...")
+    
+    # Create working directory
+    os.makedirs(working_dir, exist_ok=True)
+    
+    # Check if we're in a Kaggle environment
+    if not os.path.exists('/kaggle/input'):
+        print("⚠️ Not running in Kaggle environment")
+        return
+    
+    # Create src directory in the working directory
+    src_dir = os.path.join(working_dir, 'src')
+    os.makedirs(src_dir, exist_ok=True)
+    
+    # Find AuraNet directory in Kaggle input
+    auranet_dirs = []
+    for root, dirs, files in os.walk('/kaggle/input'):
+        if 'src' in dirs and any(f.endswith('.py') for f in files):
+            # This might be the AuraNet directory
+            auranet_dirs.append(root)
+    
+    if not auranet_dirs:
+        print("❌ Could not find AuraNet directory in Kaggle input")
+        return
+    
+    # Use the first found directory
+    source_dir = auranet_dirs[0]
+    print(f"📂 Found AuraNet in: {source_dir}")
+    
+    # Copy Python files
+    for root, _, files in os.walk(source_dir):
+        for file in files:
+            if file.endswith('.py'):
+                src_path = os.path.join(root, file)
+                rel_path = os.path.relpath(src_path, source_dir)
+                dst_path = os.path.join(working_dir, rel_path)
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+                print(f"📄 Copied {rel_path}")
+    
+    print("✅ Kaggle environment setup complete!")
+
+
+def is_kaggle_environment() -> bool:
+    """Check if running in a Kaggle environment."""
+    return os.path.exists('/kaggle/input')
+
 
 def main():
-    # Parse arguments
-    args = parse_args()
+    """Main function."""
+    parser = argparse.ArgumentParser(description='Train AuraNet (Optimized) on Celeb-DF Dataset')
+    parser.add_argument('--config', type=str, required=True,
+                       help='Path to configuration file')
+    parser.add_argument('--mode', type=str, choices=['pretrain', 'finetune', 'both'],
+                       default='finetune', help='Training mode')
+    parser.add_argument('--data_root', type=str, required=True,
+                       help='Root directory of Celeb-DF dataset')
+    parser.add_argument('--gpus', type=int, default=None,
+                       help='Number of GPUs to use (auto-detect if not specified)')
     
-    # Set up logging
-    setup_logging(log_dir='logs', level=logging.INFO)
+    # Batch size override
+    parser.add_argument('--batch_size', type=int, default=None,
+                       help='Batch size (overrides config setting)')
     
-    # Check for Kaggle environment
+    # ConvNeXt V2 pretrained weights for spatial stream (different from full model checkpoint)
+    parser.add_argument('--use_pretrained', type=str, choices=['y', 'n', 'yes', 'no'],
+                       default='n', help='Use ConvNeXt V2 pretrained weights for spatial stream')
+    parser.add_argument('--pretrained_path', type=str, default='convnextv2_pico_1k_224_fcmae.pt',
+                       help='Path to ConvNeXt V2 pretrained weights file')
+    
+    # Full model checkpoint for resuming training
+    parser.add_argument('--resume', action='store_true',
+                       help='Resume training from full AuraNet checkpoint')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                       help='Path to full AuraNet model checkpoint to resume from')
+    
+    # Evaluation
+    parser.add_argument('--mask_gt_dir', type=str, default=None,
+                       help='Directory containing ground truth masks for evaluation')
+    
+    parser.add_argument('--kaggle', action='store_true',
+                       help='Enable Kaggle environment adaptations')
+    parser.add_argument('--kaggle_working_dir', type=str, default='/kaggle/working/AuraNet',
+                       help='Working directory path on Kaggle')
+    
+    args = parser.parse_args()
+    
+    # Kaggle environment setup
     if args.kaggle or is_kaggle_environment():
-        kaggle_working_dir = args.kaggle_working_dir if args.kaggle_working_dir else '/kaggle/working/AuraNet'
-        setup_kaggle_environment(kaggle_working_dir)
-        logger.info(f"Running in Kaggle environment with working directory: {kaggle_working_dir}")
+        print("🔧 Setting up Kaggle environment...")
         
-        # Update paths for Kaggle
-        if not os.path.isabs(args.config):
-            args.config = os.path.join(kaggle_working_dir, args.config)
+        # Setup Kaggle environment first
+        setup_kaggle_environment(args.kaggle_working_dir)
+        
+        # Ensure working directory exists
+        os.makedirs(args.kaggle_working_dir, exist_ok=True)
+        
+        # Change working directory to Kaggle working directory
+        os.chdir(args.kaggle_working_dir)
+        print(f"📂 Changed working directory to: {os.getcwd()}")
+        
+        # Fix paths for Kaggle
+        if not os.path.exists(args.config):
+            # Try to resolve config path relative to working directory
+            kaggle_config_path = os.path.join(args.kaggle_working_dir, os.path.basename(args.config))
+            if os.path.exists(kaggle_config_path):
+                args.config = kaggle_config_path
+                print(f"🔧 Updated config path to: {args.config}")
+            else:
+                print(f"❌ Config file not found: {args.config}")
+                sys.exit(1)
+        
+        # Adjust pretrained path for Kaggle
+        if not os.path.exists(args.pretrained_path) and 'kaggle/input' in args.pretrained_path:
+            # The path is already a Kaggle path, keep it
+            print(f"🔍 Using pretrained weights from Kaggle: {args.pretrained_path}")
+        elif not os.path.exists(args.pretrained_path):
+            # Try to find in Kaggle input
+            for root, dirs, files in os.walk('/kaggle/input'):
+                if args.pretrained_path in files:
+                    args.pretrained_path = os.path.join(root, args.pretrained_path)
+                    print(f"🔧 Found pretrained weights at: {args.pretrained_path}")
+                    break
     
     # Load configuration
-    logger.info(f"Loading configuration from {args.config}")
-    config = load_config(args.config)
+    try:
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"❌ Error: Config file not found: {args.config}")
+        print(f"📂 Current working directory: {os.getcwd()}")
+        print(f"📄 Files in current directory: {os.listdir('.')}")
+        sys.exit(1)
     
-    # Apply optimizations
-    config = optimize_config(config, args)
+    # Override batch size if provided in arguments
+    if hasattr(args, 'batch_size') and args.batch_size is not None:
+        print(f"🔧 Overriding batch size from config to {args.batch_size}")
+        if 'training' not in config:
+            config['training'] = {'pretrain': {}, 'finetune': {}}
+        if 'pretrain' not in config['training']:
+            config['training']['pretrain'] = {}
+        if 'finetune' not in config['training']:
+            config['training']['finetune'] = {}
+            
+        config['training']['pretrain']['batch_size'] = args.batch_size
+        config['training']['finetune']['batch_size'] = args.batch_size
     
-    # Set up distributed training
-    setup_distributed(args, config)
+    # Update data root in config
+    config['dataset']['data_root'] = args.data_root
     
-    # Create model
-    model = create_model(config, args)
+    # Process ConvNeXt V2 pretrained weights arguments
+    use_pretrained = args.use_pretrained.lower() in ['y', 'yes']
+    if 'model' not in config:
+        config['model'] = {}
     
-    # Create data loaders
-    train_loader, val_loader = create_data_loaders(config, args)
+    # Override batch size if provided in arguments
+    if hasattr(args, 'batch_size') and args.batch_size is not None:
+        print(f"🔧 Overriding batch size from config to {args.batch_size}")
+        if 'training' not in config:
+            config['training'] = {'pretrain': {}, 'finetune': {}}
+        if 'pretrain' not in config['training']:
+            config['training']['pretrain'] = {}
+        if 'finetune' not in config['training']:
+            config['training']['finetune'] = {}
+            
+        config['training']['pretrain']['batch_size'] = args.batch_size
+        config['training']['finetune']['batch_size'] = args.batch_size
     
-    # Train model
-    trainer = train_model(model, train_loader, val_loader, config, args)
+    # Handle training mode logic for ConvNeXt V2 pretrained weights
+    if args.mode == 'both':
+        # For 'both' mode, only use pretrained weights in pretraining stage
+        config['model']['use_pretrained_pretrain'] = use_pretrained
+        config['model']['use_pretrained_finetune'] = False
+    else:
+        # For single mode, use pretrained weights if requested
+        config['model']['use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
+        config['model']['use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
     
-    logger.info("Training completed successfully")
+    config['model']['pretrained_path'] = args.pretrained_path
+    
+    # Set mask GT directory for evaluation
+    if args.mask_gt_dir:
+        if 'evaluation' not in config:
+            config['evaluation'] = {}
+        config['evaluation']['mask_gt_dir'] = args.mask_gt_dir
+    else:
+        # Default to the standard celeb-df-mask directory
+        if 'evaluation' not in config:
+            config['evaluation'] = {}
+        config['evaluation']['mask_gt_dir'] = 'celeb-df-mask'
+    
+    # Handle training mode logic
+    if args.mode == 'both':
+        config['training']['run_pretrain'] = True
+        config['training']['run_finetune'] = True
+        # For 'both' mode, only use pretrained weights in pretraining stage
+        config['model']['use_pretrained_pretrain'] = use_pretrained
+        config['model']['use_pretrained_finetune'] = False
+    else:
+        config['training']['run_pretrain'] = (args.mode == 'pretrain')
+        config['training']['run_finetune'] = (args.mode == 'finetune')
+        # For single mode, use pretrained weights if requested
+        config['model']['use_pretrained_pretrain'] = use_pretrained if args.mode == 'pretrain' else False
+        config['model']['use_pretrained_finetune'] = use_pretrained if args.mode == 'finetune' else False
+    
+    # Determine number of GPUs
+    if args.gpus is not None:
+        world_size = args.gpus
+    elif config['distributed']['enabled']:
+        world_size = torch.cuda.device_count()
+    else:
+        world_size = 1
+    
+    if world_size <= 1:
+        # Single GPU training
+        config['distributed']['enabled'] = False
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        
+        # Create single GPU trainer (simplified version)
+        trainer = DistributedTrainer(0, 1, config, args.mode)
+        trainer.train()
+    else:
+        # Multi-GPU training
+        print(f'Starting distributed training on {world_size} GPUs')
+        config['distributed']['enabled'] = True
+        config['distributed']['world_size'] = world_size
+        
+        # Spawn processes for each GPU
+        mp.spawn(
+            main_worker,
+            args=(world_size, config, args.mode),
+            nprocs=world_size,
+            join=True
+        )
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     try:
         # Auto-detect Kaggle environment
-        if is_kaggle_environment():
-            logger.info("Detected Kaggle environment!")
-            
+        if is_kaggle_environment() and '--kaggle' not in sys.argv:
+            sys.argv.append('--kaggle')
+            print("🔄 Auto-detected Kaggle environment, adding --kaggle flag")
+        
         main()
+        print("✅ Training completed successfully!")
     except Exception as e:
-        if is_kaggle_environment():
-            logger.error("=" * 80)
-            logger.error("ERROR IN KAGGLE ENVIRONMENT:")
-            logger.error(f"Error: {str(e)}")
-            logger.error("Debugging tips:")
-            logger.error("1. Check if --kaggle flag is set")
-            logger.error("2. Verify the correct paths in your command")
-            logger.error("3. Make sure all required files are in /kaggle/working/AuraNet/")
-            logger.error("=" * 80)
-        
-        if "pretrain" in str(e).lower():
-            logger.error("Pre-training failed!")
-        elif "finetune" in str(e).lower():
-            logger.error("Fine-tuning failed!")
-        else:
-            logger.error(f"Training failed with error: {str(e)}")
-        
-        # Print full traceback
         import traceback
+        print(f"❌ Error during training: {str(e)}")
+        print("\n🔍 Full error traceback:")
         traceback.print_exc()
         
-        sys.exit(1)
+        if is_kaggle_environment():
+            print("💡 Kaggle troubleshooting tips:")
+            print("  - Check if all source files were copied correctly")
+            print("  - Verify that data paths are correct")
+            print("  - Check GPU availability and memory usage")
+            print("  - Review configuration file settings")
+            
+            # Print current directory structure for debugging
+            print("\n📂 Current directory structure:")
+            for root, dirs, files in os.walk('.', topdown=True, maxdepth=2):
+                level = root.replace('.', '').count(os.sep)
+                indent = ' ' * 2 * level
+                print(f'{indent}{os.path.basename(root)}/')
+                subindent = ' ' * 2 * (level + 1)
+                for file in files:
+                    print(f'{subindent}{file}')
+        
+        raise

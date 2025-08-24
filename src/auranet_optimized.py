@@ -440,6 +440,112 @@ class AuraNetOptimized(nn.Module):
                 raise
                 
         logger.info("Pretrained weights loaded successfully")
+    
+    def load_convnextv2_pretrained_weights(self, pretrained_path: str, strict: bool = False):
+        """
+        Load ConvNeXtV2 pre-trained weights for spatial stream only.
+        
+        Args:
+            pretrained_path: Path to ConvNeXtV2 pre-trained weights
+            strict: Whether to strictly enforce weight matching
+        """
+        try:
+            # Load pre-trained weights with mixed precision compatibility
+            # Use weights_only=False for compatibility with older checkpoint formats
+            checkpoint = torch.load(pretrained_path, map_location='cpu', weights_only=False)
+            
+            # Extract state dict (handle different checkpoint formats)
+            if 'model' in checkpoint:
+                pretrained_dict = checkpoint['model']
+            elif 'state_dict' in checkpoint:
+                pretrained_dict = checkpoint['state_dict']
+            else:
+                pretrained_dict = checkpoint
+            
+            # Get current model state dict
+            model_dict = self.state_dict()
+            
+            # Filter and map weights for spatial stream only
+            mapped_weights = {}
+            spatial_layers_loaded = 0
+            
+            # Map ConvNeXtV2 stages to AuraNet spatial stream
+            for stage_idx in range(min(4, len(self.spatial_stages))):  # Up to 4 stages
+                stage_prefix = f'stages.{stage_idx}'  # ConvNeXtV2 format
+                auranet_prefix = f'spatial_stages.{stage_idx}'  # AuraNet format
+                
+                for key, value in pretrained_dict.items():
+                    if key.startswith(stage_prefix):
+                        # Map ConvNeXtV2 key to AuraNet key
+                        new_key = key.replace(stage_prefix, auranet_prefix)
+                        
+                        # Only load if the key exists in our model and has matching shape
+                        if new_key in model_dict:
+                            if model_dict[new_key].shape == value.shape:
+                                mapped_weights[new_key] = value
+                                spatial_layers_loaded += 1
+                            else:
+                                # Handle GRN parameter shape mismatch
+                                if 'grn.beta' in new_key or 'grn.gamma' in new_key:
+                                    # ConvNeXtV2: [1, C] -> AuraNet: [1, 1, 1, C]
+                                    if len(value.shape) == 2 and len(model_dict[new_key].shape) == 4:
+                                        # Reshape [1, C] to [1, 1, 1, C]
+                                        reshaped_value = value.view(1, 1, 1, -1)
+                                        if model_dict[new_key].shape == reshaped_value.shape:
+                                            mapped_weights[new_key] = reshaped_value
+                                            spatial_layers_loaded += 1
+                                        else:
+                                            print(f"Shape mismatch after reshape for {new_key}: "
+                                                  f"model {model_dict[new_key].shape} vs "
+                                                  f"reshaped {reshaped_value.shape}")
+                                    else:
+                                        print(f"Shape mismatch for {new_key}: "
+                                              f"model {model_dict[new_key].shape} vs "
+                                              f"pretrained {value.shape}")
+                                else:
+                                    print(f"Shape mismatch for {new_key}: "
+                                          f"model {model_dict[new_key].shape} vs "
+                                          f"pretrained {value.shape}")
+                        elif not strict:
+                            # In non-strict mode, try to find similar layers
+                            similar_keys = [k for k in model_dict.keys() if k.endswith(new_key.split('.')[-1])]
+                            if similar_keys:
+                                best_match = min(similar_keys, key=lambda x: abs(len(x) - len(new_key)))
+                                if model_dict[best_match].shape == value.shape:
+                                    mapped_weights[best_match] = value
+                                    spatial_layers_loaded += 1
+            
+            # Also try to load the stem/downsample layers if they exist
+            stem_mappings = {
+                'downsample_layers.0.0.weight': 'ams.spatial_stem.0.weight',  # First conv
+                'downsample_layers.0.0.bias': 'ams.spatial_stem.0.bias',
+                'downsample_layers.0.1.weight': 'ams.spatial_stem.1.weight',  # LayerNorm
+                'downsample_layers.0.1.bias': 'ams.spatial_stem.1.bias',
+            }
+            
+            for pretrained_key, auranet_key in stem_mappings.items():
+                if pretrained_key in pretrained_dict and auranet_key in model_dict:
+                    if model_dict[auranet_key].shape == pretrained_dict[pretrained_key].shape:
+                        mapped_weights[auranet_key] = pretrained_dict[pretrained_key]
+                        spatial_layers_loaded += 1
+            
+            # Load the mapped weights
+            if mapped_weights:
+                # Handle mixed precision: ensure weights are in correct dtype
+                current_dtype = next(self.parameters()).dtype
+                for key, value in mapped_weights.items():
+                    mapped_weights[key] = value.to(dtype=current_dtype)
+                
+                self.load_state_dict(mapped_weights, strict=False)
+                print(f"✅ Successfully loaded {spatial_layers_loaded} layers from ConvNeXtV2 pretrained weights")
+                print(f"   Loaded weights for spatial stream from: {pretrained_path}")
+                print(f"   Frequency stream (HAFT) initialized randomly as expected")
+            else:
+                print(f"⚠️ No compatible weights found in {pretrained_path}")
+                
+        except Exception as e:
+            print(f"❌ Failed to load pretrained weights from {pretrained_path}: {e}")
+            print("Proceeding with random initialization...")
         
     def _load_with_filter(self, state_dict):
         """Flexible loading of weights that match by prefix."""
@@ -479,7 +585,12 @@ def create_optimized_auranet(config_path=None, config=None, use_pretrained=False
     
     # Load pretrained weights if specified
     if use_pretrained and pretrained_path:
-        model.load_pretrained_weights(pretrained_path, strict=False)
+        # Check if this is a ConvNeXt V2 pretrained model
+        if 'convnextv2' in pretrained_path.lower():
+            print(f"🔄 Loading ConvNeXtV2 pretrained weights for spatial stream...")
+            model.load_convnextv2_pretrained_weights(pretrained_path, strict=False)
+        else:
+            model.load_pretrained_weights(pretrained_path, strict=False)
     
     # Compile model if enabled in config
     compile_model = model.config.get('compile_model', False)

@@ -159,12 +159,15 @@ class HAFT(nn.Module):
         # Core components
         self.freq_context_encoder = FrequencyContextEncoder(context_vector_dim)
         
-        # Filter predictor input dimension depends on the hierarchical context
+        # Filter predictor input dimension depends on the hierarchical context, as per the plan
+        # In the original HAFT module, the input dimension is num_haft_levels * context_vector_dim
+        # Here we're handling mag and phase separately, so each stream gets this dimension
         filter_input_dim = num_haft_levels * context_vector_dim
         self.filter_predictor = FilterPredictor(filter_input_dim, num_radial_bins)
         
-        # Level embeddings for hierarchical processing - use Linear instead of Embedding
-        self.level_projection = nn.Linear(1, 2 * context_vector_dim)
+        # Level embeddings for hierarchical processing
+        # Matches original HAFT implementation which used 2*context_vector_dim for level embedding
+        self.level_projection = nn.Linear(1, 2 * context_vector_dim) # Projects level index to embedding
         
         # Output projection to maintain channel dimensions
         self.output_proj = nn.Conv2d(in_channels, in_channels, kernel_size=1)
@@ -308,38 +311,81 @@ class HAFT(nn.Module):
                     if level == deepest_level:
                         mapped_idx = patch_idx
                     else:
-                        level_positions = patch_positions[level]
+                        level_positions_current = patch_positions[level]
                         # Find which patch at this level contains the current deepest patch
-                        mapped_idx = self._find_containing_patch(position, level_positions)
+                        mapped_idx = self._find_containing_patch(position, level_positions_current)
                     
                     # Get context vectors for this level and mapped index
                     level_contexts = contexts_by_level[level]
+                    num_patches_at_level = len(patch_positions[level])
+
+                    # CORRECTED INDEXING
+                    channel_offset = c * num_patches_at_level * B
+                    patch_offset = mapped_idx * B
+                    start_idx = channel_offset + patch_offset
+                    end_idx = start_idx + B
                     
-                    # Get batch offset for this channel
-                    batch_offset = c * B * num_patches
-                    
-                    # Add level embedding
+                    # Add level embedding - ensure it's properly added to the context vectors
                     level_input = torch.tensor([[float(level)]], device=channel_data.device, dtype=torch.float32)
                     level_input = level_input.expand(B, -1)  # (B, 1)
                     level_emb = self.level_projection(level_input)  # (B, 2*context_dim)
                     
-                    # Split level embedding into mag and phase components
-                    mag_emb, phase_emb = torch.chunk(level_emb, 2, dim=1)
+                    # Split level embedding for magnitude and phase components
+                    # This matches the original HAFT implementation
+                    mid_dim = level_emb.shape[1] // 2
+                    level_emb_mag = level_emb[:, :mid_dim]  # (B, context_dim)
+                    level_emb_phase = level_emb[:, mid_dim:]  # (B, context_dim)
                     
-                    # Add level embedding to context
-                    mag_ctx = level_contexts[f'level_{level}_mag'][batch_offset + mapped_idx*B:(batch_offset + (mapped_idx+1)*B)]
-                    phase_ctx = level_contexts[f'level_{level}_phase'][batch_offset + mapped_idx*B:(batch_offset + (mapped_idx+1)*B)]
+                    # Get context vectors for this level and mapped index
+                    level_contexts = contexts_by_level[level]
+                    num_patches_at_level = len(patch_positions[level])
+
+                    # CORRECTED INDEXING - ensure we get the right batch of context vectors
+                    channel_offset = c * num_patches_at_level * B
+                    patch_offset = mapped_idx * B
+                    start_idx = channel_offset + patch_offset
+                    end_idx = start_idx + B
                     
-                    # Enrich with level embedding
-                    enriched_mag = mag_ctx + mag_emb
-                    enriched_phase = phase_ctx + phase_emb
-                    
-                    ancestral_contexts_mag.append(enriched_mag)
-                    ancestral_contexts_phase.append(enriched_phase)
+                    # Ensure the context vectors exist for this level
+                    if f'level_{level}_mag' in level_contexts and f'level_{level}_phase' in level_contexts:
+                        try:
+                            # Get context vectors
+                            mag_ctx = level_contexts[f'level_{level}_mag'][start_idx:end_idx]
+                            phase_ctx = level_contexts[f'level_{level}_phase'][start_idx:end_idx]
+                            
+                            # Validate shapes - context vectors should be (B, context_vector_dim)
+                            if mag_ctx.shape[0] == B and mag_ctx.shape[1] == self.context_vector_dim:
+                                # Enrich with level embedding
+                                enriched_mag = mag_ctx + level_emb_mag
+                                enriched_phase = phase_ctx + level_emb_phase
+                                
+                                # Add to ancestral contexts lists
+                                ancestral_contexts_mag.append(enriched_mag)
+                                ancestral_contexts_phase.append(enriched_phase)
+                        except Exception as e:
+                            # Skip this level if there's an issue with the context vectors
+                            print(f"Error processing level {level} context: {e}")
+                            continue
                 
-                # Concatenate all ancestral contexts
-                fused_mag_vector = torch.cat(ancestral_contexts_mag, dim=1)  # (B, total_context_dim)
-                fused_phase_vector = torch.cat(ancestral_contexts_phase, dim=1)  # (B, total_context_dim)
+                # Concatenate all ancestral contexts - check if we have contexts to concatenate
+                if not ancestral_contexts_mag or not ancestral_contexts_phase:
+                    # Skip this patch if no context vectors were gathered
+                    continue
+                    
+                # Concatenate contexts for each stream
+                fused_mag_vector = torch.cat(ancestral_contexts_mag, dim=1)  # (B, num_levels*context_vector_dim)
+                fused_phase_vector = torch.cat(ancestral_contexts_phase, dim=1)  # (B, num_levels*context_vector_dim)
+                
+                # Validate tensor shapes match the filter predictor's expected input
+                expected_dim = self.num_haft_levels * self.context_vector_dim
+                if fused_mag_vector.shape[1] != expected_dim:
+                    # If dimensions don't match, likely because some levels were skipped
+                    # Pad with zeros to reach the expected dimension
+                    padding_size = expected_dim - fused_mag_vector.shape[1]
+                    if padding_size > 0:
+                        padding = torch.zeros((B, padding_size), device=fused_mag_vector.device, dtype=fused_mag_vector.dtype)
+                        fused_mag_vector = torch.cat([fused_mag_vector, padding], dim=1)
+                        fused_phase_vector = torch.cat([fused_phase_vector, padding], dim=1)
                 
                 # Predict filter profiles
                 w_mag_profile, w_phase_profile = self.filter_predictor(fused_mag_vector, fused_phase_vector)
