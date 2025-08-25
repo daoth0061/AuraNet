@@ -45,10 +45,11 @@ model:
   block_size: 16
   
   # Initial processing channels
+  # These will be overridden by resolution-specific configs
   msaf_srm_channels: 20
   msaf_dwt_channels: 12
-  msaf_fused_channels: 32
-  initial_spatial_channels: 32
+  msaf_fused_channels: 32  # Output channels of MSAF
+  mbconv_output_channels: 64  # Output channels of MBConv downsampling
   mbconv_expand_ratio: 4
   
   # HAFT internal parameters

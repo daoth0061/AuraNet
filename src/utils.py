@@ -3,10 +3,17 @@ AuraNet: A Dual-Stream Forensic Network for Face Manipulation Detection
 Core utility modules and helper functions
 """
 
+import os
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 
 class LayerNorm(nn.Module):

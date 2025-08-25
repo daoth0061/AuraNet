@@ -33,6 +33,32 @@ def deep_merge(base_dict: Dict, override_dict: Dict) -> Dict:
     return result
 
 
+def load_config(base_config_path: str, override_config_path: str = None) -> Dict[str, Any]:
+    """
+    Load configuration from base config file and optional override file.
+    
+    Args:
+        base_config_path: Path to base config file
+        override_config_path: Optional path to override config file
+        
+    Returns:
+        Merged configuration dictionary
+    """
+    # Load base configuration
+    with open(base_config_path, 'r') as f:
+        base_config = yaml.safe_load(f)
+    
+    # If override config is provided, load and merge it
+    if override_config_path:
+        with open(override_config_path, 'r') as f:
+            override_config = yaml.safe_load(f)
+        final_config = deep_merge(base_config, override_config)
+    else:
+        final_config = base_config
+    
+    return final_config
+
+
 def load_resolution_config(img_size: int, config_dir: str = "configs") -> Dict[str, Any]:
     """
     Load configuration for specific image resolution.
@@ -125,6 +151,7 @@ def update_config_from_args(config: Dict[str, Any], args) -> Dict[str, Any]:
         config['checkpoint']['resume_from'] = args.resume_from
     
     # Update GPU settings
+
     if hasattr(args, 'gpus') and args.gpus:
         if args.gpus > 1:
             config['distributed']['enabled'] = True

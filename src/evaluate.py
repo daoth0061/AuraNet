@@ -16,8 +16,15 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 import os
 import json
+import os
+import sys
 
-from auranet import create_auranet
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.auranet import create_auranet
 
 
 class AuraNetEvaluator:
@@ -331,7 +338,6 @@ def main():
             return
         
         from data_loader import create_data_loaders
-        
         # Create data loader
         _, val_loader = create_data_loaders(
             args.data_root, args.data_root, args.annotations, args.annotations,

@@ -8,9 +8,15 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import argparse
 import os
+import sys
 
-from auranet import create_auranet
-from evaluate import AuraNetEvaluator
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.auranet import create_auranet
+from src.evaluate import AuraNetEvaluator
 
 
 def create_demo_model():

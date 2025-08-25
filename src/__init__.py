@@ -16,7 +16,8 @@ Key Components:
 
 Example Usage:
     ```python
-    from auranet import create_auranet, AuraNetTrainer
+    from src.auranet import create_auranet
+    from src.train import AuraNetTrainer
     
     # Create model
     model = create_auranet(config_path='config.yaml')
@@ -29,10 +30,18 @@ Example Usage:
     ```
 """
 
-from auranet import create_auranet, AuraNet
-from train import AuraNetTrainer
-from data_loader import AuraNetDataset, create_data_loaders
-from training import (
+import os
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.auranet import create_auranet, AuraNet
+from src.train import AuraNetTrainer
+from src.data_loader import AuraNetDataset, create_data_loaders
+from src.training import (
     CombinedPretrainLoss, 
     CombinedFinetuneLoss,
     get_optimizer,

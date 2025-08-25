@@ -3,10 +3,18 @@ Cross-Fusion Block Implementation
 Implements Deformable and Standard Cross-Attention mechanisms
 """
 
+import os
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import LayerNorm, create_grid_like, normalize_grid, ContinuousPositionalBias
+from src.utils import LayerNorm, create_grid_like, normalize_grid, ContinuousPositionalBias
 import yaml
 import os
 
@@ -29,6 +37,7 @@ class DeformableCrossAttention(nn.Module):
         self.scale = (dim // heads) ** -0.5
         
         # Offset scale from config
+
         self.offset_scale = config['model']['deformable_offset_scale']
         
         inner_dim = dim

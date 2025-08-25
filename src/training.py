@@ -10,7 +10,14 @@ from pytorch_metric_learning import losses
 from pytorch_msssim import ssim
 import yaml
 import os
-from config_utils import safe_load_config, load_config_safe
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.config_utils import safe_load_config, load_config_safe
 
 
 class ImageReconstructionLoss(nn.Module):

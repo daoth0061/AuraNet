@@ -6,7 +6,15 @@ Implements DSF, ClassificationHead, and SegmentationHead
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import LayerNorm, Block, CBAMChannelAttention
+import os
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.utils import LayerNorm, Block, CBAMChannelAttention
 try:
     from timm.layers import trunc_normal_  # New import path
 except ImportError:
@@ -89,6 +97,7 @@ class ClassificationHead(nn.Module):
                 config = yaml.safe_load(f)
         
         # Extract parameters from config
+
         num_classes = config['num_classes']
         hidden_dim = config['model']['mlp_hidden_dim']
         dropout = config['model']['classification_dropout']

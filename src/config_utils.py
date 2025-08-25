@@ -6,6 +6,14 @@ Provides safe YAML loading with type validation
 import yaml
 import os
 from typing import Dict, Any, Union
+import os
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 
 
 def safe_load_config(config_path: str) -> Dict[str, Any]:

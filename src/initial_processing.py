@@ -8,9 +8,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pywt
 import numpy as np
-from utils import LayerNorm, SEBlock, CBAMChannelAttention, CBAMSpatialAttention
 import yaml
 import os
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.utils import LayerNorm, SEBlock, CBAMChannelAttention, CBAMSpatialAttention
 
 
 class SRMFilters(nn.Module):
@@ -109,57 +116,55 @@ class DWTExtractor(nn.Module):
         """
         B, _, H, W = x.shape
         
-        dwt_features = []
+        # Convert to numpy for pywt processing
+        x_np = x.squeeze(1).cpu().numpy()  # (B, H, W)
         
-        for wavelet in self.wavelets:
-            # Convert to numpy for pywt processing
-            x_np = x.squeeze(1).cpu().numpy()  # (B, H, W)
+        all_batch_coeffs = []
+        
+        # Process each image in the batch
+        for i in range(B):
+            wavelet_coeffs = []
+            target_size = None
             
-            batch_coeffs = []
-            for i in range(B):
-                # 2-level DWT
+            # Apply each wavelet
+            for wavelet in self.wavelets:
+                # 1-level DWT
                 coeffs = pywt.dwt2(x_np[i], wavelet)
-                cA1, (cH1, cV1, cD1) = coeffs
+                _, (cH1, cV1, cD1) = coeffs
                 
-                coeffs2 = pywt.dwt2(cA1, wavelet)
-                cA2, (cH2, cV2, cD2) = coeffs2
-                
-                # Collect detail coefficients from both levels
-                # Level 1: cH1, cV1, cD1 are at H/2 x W/2
-                # Level 2: cH2, cV2, cD2 are at H/4 x W/4, need to upsample to H/2 x W/2
-                
-                # Convert level 1 coefficients to tensors first to get actual size
+                # Convert coefficients to tensors
                 cH1_tensor = torch.tensor(cH1).float()
                 cV1_tensor = torch.tensor(cV1).float()
                 cD1_tensor = torch.tensor(cD1).float()
                 
-                # Use actual size of level 1 coefficients as target
-                target_size = cH1_tensor.shape  # Actual (H/2, W/2) size
+                # Store the size of the first coefficient to use as target size
+                if target_size is None:
+                    target_size = cH1_tensor.shape
                 
-                # Convert and upsample level 2 coefficients
-                cH2_up = torch.tensor(cH2).float().unsqueeze(0).unsqueeze(0)
-                cV2_up = torch.tensor(cV2).float().unsqueeze(0).unsqueeze(0)
-                cD2_up = torch.tensor(cD2).float().unsqueeze(0).unsqueeze(0)
+                # Resize all coefficients to match the target size if needed
+                if cH1_tensor.shape != target_size:
+                    cH1_tensor = F.interpolate(cH1_tensor.unsqueeze(0).unsqueeze(0), 
+                                            size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                if cV1_tensor.shape != target_size:
+                    cV1_tensor = F.interpolate(cV1_tensor.unsqueeze(0).unsqueeze(0), 
+                                            size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                if cD1_tensor.shape != target_size:
+                    cD1_tensor = F.interpolate(cD1_tensor.unsqueeze(0).unsqueeze(0), 
+                                            size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
                 
-                cH2_up = F.interpolate(cH2_up, size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                cV2_up = F.interpolate(cV2_up, size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                cD2_up = F.interpolate(cD2_up, size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                
-                # Stack all detail coefficients
-                detail_stack = torch.stack([
-                    cH1_tensor, cV1_tensor, cD1_tensor,
-                    cH2_up, cV2_up, cD2_up
-                ], dim=0)  # (6, H/2, W/2)
-                
-                batch_coeffs.append(detail_stack)
+                # Collect all detail coefficients from this wavelet
+                detail_coeffs = [cH1_tensor, cV1_tensor, cD1_tensor]
+                wavelet_coeffs.extend(detail_coeffs)
             
-            # Convert back to tensor and move to device
-            batch_tensor = torch.stack(batch_coeffs, dim=0).to(x.device)  # (B, 6, H/2, W/2)
-            dwt_features.append(batch_tensor)
+            # Stack all wavelet coefficients for this image
+            # Should have 6 total (3 coefficients × 2 wavelets)
+            image_coeffs = torch.stack(wavelet_coeffs, dim=0)  # (6, H/2, W/2)
+            all_batch_coeffs.append(image_coeffs)
         
-        # Use features from the first wavelet for now
-        # TODO: Could concatenate features from both wavelets if needed
-        return dwt_features[0]
+        # Stack batch dimension
+        batch_tensor = torch.stack(all_batch_coeffs, dim=0).to(x.device)  # (B, 6, H/2, W/2)
+        
+        return batch_tensor
 
 
 class MSAF(nn.Module):
@@ -174,15 +179,16 @@ class MSAF(nn.Module):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
         
-        # Extract parameters from config
+        # Extract parameters from config - now resolution-aware
         srm_channels = config['model']['msaf_srm_channels']
         dwt_channels = config['model']['msaf_dwt_channels']
+        fused_channels = config['model']['msaf_fused_channels']  # Output channels, resolution-specific
         cbam_reduction = config['model']['cbam_reduction']
         
         self.srm_filters = SRMFilters()
         self.dwt_extractor = DWTExtractor()
         
-        # Processing paths
+        # Processing paths - now using resolution-specific channel counts
         self.srm_path = nn.Sequential(
             nn.Conv2d(10, srm_channels, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(srm_channels),
@@ -195,10 +201,25 @@ class MSAF(nn.Module):
             nn.GELU()
         )
         
-        # CBAM attention
+        # Calculate total channels (resolution-specific)
         total_channels = srm_channels + dwt_channels
-        self.channel_attention = CBAMChannelAttention(total_channels, reduction=cbam_reduction)
+        
+        # If total_channels doesn't match the desired fused_channels, add a projection
+        if total_channels != fused_channels:
+            self.projection = nn.Sequential(
+                nn.Conv2d(total_channels, fused_channels, kernel_size=1),
+                nn.BatchNorm2d(fused_channels),
+                nn.GELU()
+            )
+        else:
+            self.projection = nn.Identity()
+        
+        # CBAM attention
+        self.channel_attention = CBAMChannelAttention(fused_channels, reduction=cbam_reduction)
         self.spatial_attention = CBAMSpatialAttention(kernel_size=7)
+        
+        # Store the expected output channels for debugging
+        self.output_channels = fused_channels
         
     def forward(self, rgb_image):
         """
@@ -241,7 +262,7 @@ class MSAF(nn.Module):
 class MBConvDownsample(nn.Module):
     """MBConv Downsample Block."""
     
-    def __init__(self, in_channels=None, out_channels=64, config=None):
+    def __init__(self, in_channels=None, out_channels=None, config=None):
         super().__init__()
         
         # Load config if provided
@@ -257,6 +278,10 @@ class MBConvDownsample(nn.Module):
         # Use config default if in_channels not specified
         if in_channels is None:
             in_channels = config['model']['msaf_fused_channels']
+            
+        # Use resolution-specific output channels from config if not specified
+        if out_channels is None:
+            out_channels = config['model']['mbconv_output_channels']
         
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -343,8 +368,9 @@ class ArtifactModulatedStem(nn.Module):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
         
-        # Extract dimensions
+        # Extract dimensions - now resolution-aware
         dims = config['dims']  # [64, 128, 256, 512]
+        msaf_channels = config['model']['msaf_fused_channels']
         
         # 1.1.1 Parallel Feature Extraction
         
@@ -355,12 +381,13 @@ class ArtifactModulatedStem(nn.Module):
         )
         
         # Artifact Path: Compact MSAF Variant
-        self.msaf = MSAF(config=config)  # Outputs (B, 32, H/2, W/2)
+        self.msaf = MSAF(config=config)  # Outputs (B, msaf_fused_channels, H/2, W/2)
         
         # 1.1.2 Parameter Prediction & Adaptive Modulation
         
         # Parameter Head: downsample from H/2 to H/4 and predict gamma, beta
-        self.parameter_head = nn.Conv2d(32, 128, kernel_size=3, stride=2, padding=1)
+        # Now using configurable msaf_channels
+        self.parameter_head = nn.Conv2d(msaf_channels, dims[0] * 2, kernel_size=3, stride=2, padding=1)
         
     def forward(self, rgb_image):
         """
@@ -376,13 +403,15 @@ class ArtifactModulatedStem(nn.Module):
         spatial_features = self.spatial_stem(rgb_image)  # (B, 64, H/4, W/4)
         
         # Artifact Path
-        artifact_features = self.msaf(rgb_image)  # (B, 32, H/2, W/2)
+        artifact_features = self.msaf(rgb_image)  # (B, msaf_fused_channels, H/2, W/2)
         
         # 1.1.2 Parameter Prediction & Adaptive Modulation
         
         # Predict modulation parameters
-        params = self.parameter_head(artifact_features)  # (B, 128, H/4, W/4)
-        gamma, beta = torch.split(params, 64, dim=1)  # Each (B, 64, H/4, W/4)
+        params = self.parameter_head(artifact_features)  # (B, dims[0]*2, H/4, W/4)
+        
+        # Split into gamma and beta, each with dims[0] channels
+        gamma, beta = torch.split(params, spatial_features.size(1), dim=1)
         
         # Adaptive modulation (AdaIN-style)
         enhanced_features = gamma * spatial_features + beta
@@ -408,16 +437,16 @@ class InitialSpatialStem(nn.Module):
         # Standard ConvNeXt-style stem: single 4x4 conv with stride=4
         # This matches FCMAE's encoder stem exactly
         self.stem = nn.Sequential(
-            nn.Conv2d(3, dims[0], kernel_size=4, stride=4),  # 256x256 -> 64x64
+            nn.Conv2d(3, dims[0], kernel_size=4, stride=4),  # HxW -> H/4 x W/4
             LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
         
     def forward(self, rgb_image):
         """
         Args:
-            rgb_image: (B, 3, H, W) - typically (B, 3, 256, 256)
+            rgb_image: (B, 3, H, W)
             
         Returns:
-            (B, 64, H/4, W/4) - typically (B, 64, 64, 64)
+            (B, dims[0], H/4, W/4)
         """
         return self.stem(rgb_image)

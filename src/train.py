@@ -5,16 +5,19 @@ Training scripts for AuraNet
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
-import os
-import time
-import json
 from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+import os
+import sys
 
-from auranet import create_auranet
-from training import CombinedPretrainLoss, CombinedFinetuneLoss, get_optimizer, get_scheduler, create_random_mask
-from data_loader import create_data_loaders
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+from src.auranet import create_auranet
+from src.training import CombinedPretrainLoss, CombinedFinetuneLoss, get_optimizer, get_scheduler, create_random_mask
+from src.data_loader import create_data_loaders
 
 
 class AuraNetTrainer:

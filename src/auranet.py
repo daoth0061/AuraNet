@@ -7,12 +7,20 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 import yaml
-from initial_processing import ArtifactModulatedStem, MSAF, MBConvDownsample, InitialSpatialStem
-from haft import HAFT
-from cross_fusion import CrossFusionBlock
-from output_heads import DSF, ClassificationHead, SegmentationHead
-from output_heads import ImageDecoder, MaskDecoder, ContrastiveProjectionHead
-from utils import Block, LayerNorm
+import os
+import sys
+
+# Add the project root directory to Python path for absolute imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.initial_processing import ArtifactModulatedStem, MSAF, MBConvDownsample, InitialSpatialStem
+from src.haft import HAFT
+from src.cross_fusion import CrossFusionBlock
+from src.output_heads import DSF, ClassificationHead, SegmentationHead
+from src.output_heads import ImageDecoder, MaskDecoder, ContrastiveProjectionHead
+from src.utils import Block, LayerNorm
 
 
 class DownsampleLayer(nn.Module):

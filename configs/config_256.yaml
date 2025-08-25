@@ -24,6 +24,12 @@ model:
   attention_heads: 8  # More heads
   mlp_hidden_dim: 128  # Larger MLP
   ffn_hidden_ratio: 4
+  
+  # Initial processing channels - Original values for 256x256
+  msaf_srm_channels: 20
+  msaf_dwt_channels: 12
+  msaf_fused_channels: 32  # Original size from implementation plan
+  mbconv_output_channels: 64  # Original size from implementation plan, matches dims[0]
 
   # Pretrained model configuration
   pretrained:
@@ -34,8 +40,8 @@ model:
 
 # Memory configuration - High memory usage
 memory_reservation:
-  enabled: true
-  fraction: 0.8
+  enabled: false
+  fraction: 0.0
 
 # Training parameters - Optimized for 256x256
 training:

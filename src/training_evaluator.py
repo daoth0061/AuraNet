@@ -320,6 +320,7 @@ class TrainingEvaluator:
         # Mask evaluation using GT masks from batch (preferred) or disk fallback
         if all_pred_masks and all_gt_masks:
             # Use GT masks from batch - this is the preferred method
+
             try:
                 all_pred_masks = torch.cat(all_pred_masks, dim=0)
                 all_gt_masks = torch.cat(all_gt_masks, dim=0)
