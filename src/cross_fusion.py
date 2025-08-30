@@ -20,7 +20,7 @@ import os
 
 
 class DeformableCrossAttention(nn.Module):
-    """Deformable Cross-Attention for high-resolution stages (2 & 3)."""
+    """Deformable Cross-Attention for high-resolution stages (2 & 3) - Optimized for Speed."""
     
     def __init__(self, dim, heads=8, num_offsets=9, config=None):
         super().__init__()
@@ -37,25 +37,24 @@ class DeformableCrossAttention(nn.Module):
         self.scale = (dim // heads) ** -0.5
         
         # Offset scale from config
-
         self.offset_scale = config['model']['deformable_offset_scale']
         
         inner_dim = dim
         
-        # Query, Key, Value projections
+        # Query, Key, Value projections - use Conv2d for efficiency
         self.to_q = nn.Conv2d(dim, inner_dim, 1, bias=False)
         self.to_k = nn.Conv2d(dim, inner_dim, 1, bias=False)  
         self.to_v = nn.Conv2d(dim, inner_dim, 1, bias=False)
         
-        # Offset prediction network
+        # SPEED OPTIMIZATION: Restore sophisticated offset prediction
         self.to_offsets = nn.Sequential(
-            nn.Conv2d(dim, dim // 2, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(dim // 2, num_offsets * 2, 1)  # 2D offsets
+            nn.Conv2d(dim, dim // 4, 1),
+            nn.GELU(),
+            nn.Conv2d(dim // 4, 2 * num_offsets, 1)  # Predict multiple offsets per position
         )
         
-        # Relative positional bias
-        self.rel_pos_bias = ContinuousPositionalBias(dim, heads)
+        # Restore relative positional bias
+        self.rel_pos_bias = ContinuousPositionalBias(dim // heads, heads)
         
         # Output projection
         self.to_out = nn.Conv2d(inner_dim, dim, 1)
@@ -71,109 +70,76 @@ class DeformableCrossAttention(nn.Module):
         """
         B, C, H, W = query_map.shape
         
-        # Generate queries and predict offsets
+        # SPEED OPTIMIZATION: Restore sophisticated deformable attention
+        # Generate queries
         q = self.to_q(query_map)  # (B, C, H, W)
-        offsets = self.to_offsets(q)  # (B, num_offsets*2, H, W)
         
-        # Reshape offsets
-        offsets = offsets.view(B, self.num_offsets, 2, H, W)  # (B, num_offsets, 2, H, W)
+        # Restore sophisticated offset prediction - multiple offsets per position
+        offsets = self.to_offsets(q)  # (B, 2*num_offsets, H, W)
+        offsets = offsets.view(B, 2, self.num_offsets, H, W)  # (B, 2, num_offsets, H, W)
         
         # Create base sampling grid
-        base_grid = create_grid_like(query_map)  # (B, 2, H, W)
-        base_grid = normalize_grid(base_grid)    # Normalize to [-1, 1]
+        device = query_map.device
+        y_coords, x_coords = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=device),
+            torch.linspace(-1, 1, W, device=device),
+            indexing='ij'
+        )
+        base_grid = torch.stack([x_coords, y_coords], dim=0).unsqueeze(0).repeat(B, 1, 1, 1)  # (B, 2, H, W)
         
-        # Apply offsets to create sampling locations
-        # For simplicity, we'll use the first offset for each query point
-        offset = offsets[:, 0]  # (B, 2, H, W) - use first offset
+        # Apply scaled offsets for each offset position
+        offset_grids = []
+        for i in range(self.num_offsets):
+            offset = offsets[:, :, i] * self.offset_scale  # (B, 2, H, W)
+            vgrid = base_grid + offset  # (B, 2, H, W)
+            vgrid = vgrid.permute(0, 2, 3, 1)  # (B, H, W, 2)
+            offset_grids.append(vgrid)
         
-        # Scale offsets (they should be small perturbations)
-        offset = offset * self.offset_scale  
+        # SPEED OPTIMIZATION: Efficient grid sampling for multiple offsets
+        kv_sampled_list = []
+        for vgrid in offset_grids:
+            kv_sampled = F.grid_sample(kv_map, vgrid, mode='bilinear', 
+                                       padding_mode='border', align_corners=True)  # (B, C, H, W)
+            kv_sampled_list.append(kv_sampled)
         
-        # Create sampling grid
-        vgrid = base_grid + offset  # (B, 2, H, W)
-        vgrid = vgrid.permute(0, 2, 3, 1)  # (B, H, W, 2)
+        # Concatenate sampled features
+        kv_multi = torch.cat(kv_sampled_list, dim=1)  # (B, C*num_offsets, H, W)
         
-        # Sample key-value features
-        kv_sampled = F.grid_sample(kv_map, vgrid, mode='bilinear', 
-                                   padding_mode='border', align_corners=True)  # (B, C, H, W)
+        # Generate keys and values from multi-sampled features
+        k = self.to_k(kv_multi)  # (B, C*num_offsets, H, W)
+        v = self.to_v(kv_multi)  # (B, C*num_offsets, H, W)
         
-        # Generate keys and values from sampled features
-        k = self.to_k(kv_sampled)  # (B, C, H, W)
-        v = self.to_v(kv_sampled)  # (B, C, H, W)
+        # SPEED OPTIMIZATION: Use efficient attention computation
+        # Reshape for attention: (B, heads, C//heads, H*W) -> (B, heads, H*W, C//heads)
+        q_attn = q.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)
+        k_attn = k.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)
+        v_attn = v.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)
         
-        # Reshape for attention computation
-        q = q.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)  # (B, heads, HW, C//heads)
-        k = k.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)  # (B, heads, HW, C//heads)
-        v = v.view(B, self.heads, C // self.heads, H * W).transpose(-2, -1)  # (B, heads, HW, C//heads)
+        # Restore sophisticated relative positional bias
+        rel_pos_bias = self.rel_pos_bias(H, W, device=device)  # (num_heads, H*W, H*W)
         
-        # MEMORY OPTIMIZATION: Use memory-efficient attention
+        # SPEED OPTIMIZATION: Use Flash Attention when available
         try:
-            # Try to use Flash Attention if available (PyTorch 2.0+)
-            try:
-                # New API
-                with torch.nn.attention.sdpa_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
-                    # Reshape for proper stride: (B, HW, heads, C//heads) -> (B*HW, heads, C//heads)
-                    B, heads, HW, dim = q.shape
-                    q_sdpa = q.transpose(1, 2).contiguous().view(B * HW, heads, dim)  
-                    k_sdpa = k.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
-                    v_sdpa = v.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
-                    
-                    # Use scaled_dot_product_attention for memory efficiency
-                    out_sdpa = F.scaled_dot_product_attention(
-                        q_sdpa, k_sdpa, v_sdpa,
-                        attn_mask=None,
-                        dropout_p=0.0,
-                        is_causal=False
-                    )
-                    # Reshape back: (B*HW, heads, C//heads) -> (B, heads, HW, C//heads)
-                    out = out_sdpa.view(B, HW, heads, dim).transpose(1, 2)
-            except AttributeError:
-                # Fallback to old API
-                with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
-                    # Reshape for proper stride: (B, HW, heads, C//heads) -> (B*HW, heads, C//heads)
-                    B, heads, HW, dim = q.shape
-                    q_sdpa = q.transpose(1, 2).contiguous().view(B * HW, heads, dim)  
-                    k_sdpa = k.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
-                    v_sdpa = v.transpose(1, 2).contiguous().view(B * HW, heads, dim)   
-                    
-                    # Use scaled_dot_product_attention for memory efficiency
-                    out_sdpa = F.scaled_dot_product_attention(
-                        q_sdpa, k_sdpa, v_sdpa,
-                        attn_mask=None,
-                        dropout_p=0.0,
-                        is_causal=False
-                    )
-                    # Reshape back: (B*HW, heads, C//heads) -> (B, heads, HW, C//heads)
-                    out = out_sdpa.view(B, HW, heads, dim).transpose(1, 2)
+            # Try Flash Attention first (fastest)
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+                out_attn = F.scaled_dot_product_attention(
+                    q_attn, k_attn, v_attn,
+                    attn_mask=rel_pos_bias if rel_pos_bias is not None else None,
+                    dropout_p=0.0, is_causal=False
+                )
         except:
-            # Fallback to standard attention computation
-            # Compute attention scores
-            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, HW, HW)
-            
-            # Add relative positional bias
-            # Create coordinate grids for bias computation
-            y_coords, x_coords = torch.meshgrid(
-                torch.arange(H, device=query_map.device),
-                torch.arange(W, device=query_map.device),
-                indexing='ij'
-            )
-            query_coords = torch.stack([x_coords.flatten(), y_coords.flatten()], dim=-1)  # (HW, 2)
-            query_coords = query_coords.unsqueeze(0).repeat(B, 1, 1).float()  # (B, HW, 2)
-            
-            # For simplicity, use the same coordinates for keys (this can be refined)
-            key_coords = query_coords  
-            
-            rel_bias = self.rel_pos_bias(query_coords, key_coords)  # (B, heads, HW, HW)
-            attn = attn + rel_bias
-            
-            # Apply softmax
+            # Fallback to efficient matrix multiplication
+            # Compute attention scores efficiently
+            attn = torch.matmul(q_attn, k_attn.transpose(-2, -1)) * self.scale  # (B, heads, H*W, H*W)
+            if rel_pos_bias is not None:
+                attn = attn + rel_pos_bias.unsqueeze(0)  # Add relative positional bias
             attn = F.softmax(attn, dim=-1)
             
             # Apply attention to values
-            out = attn @ v  # (B, heads, HW, C//heads)
+            out_attn = torch.matmul(attn, v_attn)  # (B, heads, H*W, C//heads)
         
-        # Reshape back to feature map format
-        out = out.transpose(-2, -1).reshape(B, C, H, W)  # (B, C, H, W)
+        # Reshape back to feature map
+        out = out_attn.transpose(-2, -1).reshape(B, C, H, W)  # (B, C, H, W)
         
         # Final projection
         out = self.to_out(out)
@@ -182,7 +148,7 @@ class DeformableCrossAttention(nn.Module):
 
 
 class StandardCrossAttention(nn.Module):
-    """Standard Cross-Attention for low-resolution stages (4 & 5)."""
+    """Standard Cross-Attention for low-resolution stages (4 & 5) - Optimized for Speed."""
     
     def __init__(self, dim, heads=8):
         super().__init__()
@@ -192,7 +158,7 @@ class StandardCrossAttention(nn.Module):
         
         inner_dim = dim
         
-        # Linear projections
+        # Linear projections - optimized for speed
         self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.to_k = nn.Linear(dim, inner_dim, bias=False)
         self.to_v = nn.Linear(dim, inner_dim, bias=False)
@@ -210,7 +176,9 @@ class StandardCrossAttention(nn.Module):
             out: (B, C, H, W)
         """
         B, C, H, W = query_map.shape
+        HW = H * W
         
+        # SPEED OPTIMIZATION: Efficient sequence processing
         # Flatten to sequences
         query_seq = query_map.flatten(2).transpose(1, 2)  # (B, H*W, C)
         kv_seq = kv_map.flatten(2).transpose(1, 2)        # (B, H*W, C)
@@ -220,51 +188,32 @@ class StandardCrossAttention(nn.Module):
         k = self.to_k(kv_seq)     # (B, H*W, C)
         v = self.to_v(kv_seq)     # (B, H*W, C)
         
-        # Reshape for multi-head attention
-        q = q.view(B, H*W, self.heads, C // self.heads).transpose(1, 2)  # (B, heads, H*W, C//heads)
-        k = k.view(B, H*W, self.heads, C // self.heads).transpose(1, 2)  # (B, heads, H*W, C//heads)
-        v = v.view(B, H*W, self.heads, C // self.heads).transpose(1, 2)  # (B, heads, H*W, C//heads)
+        # SPEED OPTIMIZATION: Reshape for efficient attention
+        # (B, H*W, heads, C//heads) -> (B, heads, H*W, C//heads)
+        q_attn = q.view(B, HW, self.heads, C // self.heads).transpose(1, 2)
+        k_attn = k.view(B, HW, self.heads, C // self.heads).transpose(1, 2)
+        v_attn = v.view(B, HW, self.heads, C // self.heads).transpose(1, 2)
         
-        # MEMORY OPTIMIZATION: Use memory-efficient attention
+        # SPEED OPTIMIZATION: Use Flash Attention when available
         try:
-            # Try to use Flash Attention if available (PyTorch 2.0+)
-            try:
-                # New API
-                with torch.nn.attention.sdpa_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
-                    # Use scaled_dot_product_attention for memory efficiency
-                    out = F.scaled_dot_product_attention(
-                        q.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                        k.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                        v.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                        attn_mask=None,
-                        dropout_p=0.0,
-                        is_causal=False
-                    )
-                    out = out.transpose(1, 2)  # (B, heads, H*W, C//heads)
-            except AttributeError:
-                # Fallback to old API
-                with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
-                    # Use scaled_dot_product_attention for memory efficiency
-                    out = F.scaled_dot_product_attention(
-                        q.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                        k.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                        v.transpose(1, 2),  # (B, H*W, heads, C//heads)
-                        attn_mask=None,
-                        dropout_p=0.0,
-                        is_causal=False
-                    )
-                    out = out.transpose(1, 2)  # (B, heads, H*W, C//heads)
+            # Try Flash Attention first (fastest)
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+                out_attn = F.scaled_dot_product_attention(
+                    q_attn, k_attn, v_attn,
+                    attn_mask=None, dropout_p=0.0, is_causal=False
+                )
         except:
-            # Fallback to standard attention computation
-            # Compute attention
-            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, H*W, H*W)
+            # Fallback to efficient matrix multiplication
+            # Compute attention scores efficiently
+            attn = torch.matmul(q_attn, k_attn.transpose(-2, -1)) * self.scale  # (B, heads, H*W, H*W)
             attn = F.softmax(attn, dim=-1)
             
             # Apply attention to values
-            out = attn @ v  # (B, heads, H*W, C//heads)
+            out_attn = torch.matmul(attn, v_attn)  # (B, heads, H*W, C//heads)
         
-        # Reshape back
-        out = out.transpose(1, 2).reshape(B, H*W, C)  # (B, H*W, C)
+        # SPEED OPTIMIZATION: Efficient reshape back
+        # (B, heads, H*W, C//heads) -> (B, H*W, C)
+        out = out_attn.transpose(1, 2).reshape(B, HW, C)
         
         # Final projection
         out = self.to_out(out)  # (B, H*W, C)

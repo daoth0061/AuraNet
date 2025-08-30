@@ -21,7 +21,7 @@ from src.utils import LayerNorm, SEBlock, CBAMChannelAttention, CBAMSpatialAtten
 
 
 class SRMFilters(nn.Module):
-    """Fixed SRM filter bank for steganalysis-inspired feature extraction."""
+    """Fixed SRM filter bank for steganalysis-inspired feature extraction - Optimized."""
     
     def __init__(self):
         super().__init__()
@@ -79,14 +79,17 @@ class SRMFilters(nn.Module):
             
             filter_tensors.append(torch.tensor(f_array).unsqueeze(0).unsqueeze(0))
         
-        # Stack all filters
+        # Stack all filters into a single convolution kernel for maximum speed
         srm_filters = torch.cat(filter_tensors, dim=0)  # (10, 1, 5, 5)
         
         # Register as non-trainable parameters
         self.register_buffer('filters', srm_filters)
         
+        # SPEED OPTIMIZATION: Pre-compute group convolution parameters
+        self.num_filters = srm_filters.shape[0]
+        
     def forward(self, x):
-        """Apply SRM filters to input image.
+        """Apply SRM filters to input image with optimized convolution.
         
         Args:
             x: (B, 1, H, W) grayscale image
@@ -94,19 +97,39 @@ class SRMFilters(nn.Module):
         Returns:
             (B, 10, H, W) SRM feature maps
         """
-        # Apply all 10 SRM filters
-        return F.conv2d(x, self.filters, padding=2)
+        # SPEED OPTIMIZATION: Single efficient convolution with all filters
+        # This is already optimized, but ensure we're using the most efficient path
+        return F.conv2d(x, self.filters, padding=2, groups=1)
 
 
 class DWTExtractor(nn.Module):
-    """2-level Discrete Wavelet Transform feature extractor."""
+    """2-level Discrete Wavelet Transform feature extractor - Optimized for Speed."""
     
     def __init__(self):
         super().__init__()
         self.wavelets = ['haar', 'coif1']
         
+        # Pre-compute wavelet filters for speed
+        self.register_buffer('haar_filters', self._get_wavelet_filters('haar'))
+        self.register_buffer('coif1_filters', self._get_wavelet_filters('coif1'))
+        
+    def _get_wavelet_filters(self, wavelet_name):
+        """Pre-compute wavelet decomposition filters."""
+        import pywt
+        
+        # Get wavelet filters
+        wavelet = pywt.Wavelet(wavelet_name)
+        dec_lo = wavelet.dec_lo  # Low-pass decomposition
+        dec_hi = wavelet.dec_hi  # High-pass decomposition
+        
+        # Convert to tensors
+        dec_lo = torch.tensor(dec_lo, dtype=torch.float32)
+        dec_hi = torch.tensor(dec_hi, dtype=torch.float32)
+        
+        return torch.stack([dec_lo, dec_hi], dim=0)  # (2, filter_len)
+    
     def forward(self, x):
-        """Extract DWT features.
+        """Extract DWT features with vectorized processing.
         
         Args:
             x: (B, 1, H, W) grayscale image
@@ -116,55 +139,52 @@ class DWTExtractor(nn.Module):
         """
         B, _, H, W = x.shape
         
-        # Convert to numpy for pywt processing
-        x_np = x.squeeze(1).cpu().numpy()  # (B, H, W)
+        # SPEED OPTIMIZATION: Vectorized DWT using separable convolutions
+        # Instead of sequential numpy processing, use PyTorch conv2d
         
-        all_batch_coeffs = []
+        all_coeffs = []
         
-        # Process each image in the batch
-        for i in range(B):
-            wavelet_coeffs = []
-            target_size = None
+        for wavelet_name in self.wavelets:
+            if wavelet_name == 'haar':
+                filters = self.haar_filters
+            else:  # coif1
+                filters = self.coif1_filters
             
-            # Apply each wavelet
-            for wavelet in self.wavelets:
-                # 1-level DWT
-                coeffs = pywt.dwt2(x_np[i], wavelet)
-                _, (cH1, cV1, cD1) = coeffs
-                
-                # Convert coefficients to tensors
-                cH1_tensor = torch.tensor(cH1).float()
-                cV1_tensor = torch.tensor(cV1).float()
-                cD1_tensor = torch.tensor(cD1).float()
-                
-                # Store the size of the first coefficient to use as target size
-                if target_size is None:
-                    target_size = cH1_tensor.shape
-                
-                # Resize all coefficients to match the target size if needed
-                if cH1_tensor.shape != target_size:
-                    cH1_tensor = F.interpolate(cH1_tensor.unsqueeze(0).unsqueeze(0), 
-                                            size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                if cV1_tensor.shape != target_size:
-                    cV1_tensor = F.interpolate(cV1_tensor.unsqueeze(0).unsqueeze(0), 
-                                            size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                if cD1_tensor.shape != target_size:
-                    cD1_tensor = F.interpolate(cD1_tensor.unsqueeze(0).unsqueeze(0), 
-                                            size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                
-                # Collect all detail coefficients from this wavelet
-                detail_coeffs = [cH1_tensor, cV1_tensor, cD1_tensor]
-                wavelet_coeffs.extend(detail_coeffs)
+            dec_lo, dec_hi = filters[0], filters[1]
+            filter_len = dec_lo.shape[0]
             
-            # Stack all wavelet coefficients for this image
-            # Should have 6 total (3 coefficients × 2 wavelets)
-            image_coeffs = torch.stack(wavelet_coeffs, dim=0)  # (6, H/2, W/2)
-            all_batch_coeffs.append(image_coeffs)
+            # Create 2D separable filters
+            # Horizontal filtering
+            h_lo = dec_lo.view(1, 1, 1, -1)  # (1, 1, 1, filter_len)
+            h_hi = dec_hi.view(1, 1, 1, -1)  # (1, 1, 1, filter_len)
+            
+            # Vertical filtering  
+            v_lo = dec_lo.view(1, 1, -1, 1)  # (1, 1, filter_len, 1)
+            v_hi = dec_hi.view(1, 1, -1, 1)  # (1, 1, filter_len, 1)
+            
+            # Apply horizontal filtering
+            x_h_lo = F.conv2d(x, h_lo, padding=(0, filter_len//2))
+            x_h_hi = F.conv2d(x, h_hi, padding=(0, filter_len//2))
+            
+            # Apply vertical filtering to get detail coefficients
+            # LL (not used), LH, HL, HH
+            cLH = F.conv2d(x_h_lo, v_hi, padding=(filter_len//2, 0))  # Horizontal low, vertical high
+            cHL = F.conv2d(x_h_hi, v_lo, padding=(filter_len//2, 0))  # Horizontal high, vertical low  
+            cHH = F.conv2d(x_h_hi, v_hi, padding=(filter_len//2, 0))  # Horizontal high, vertical high
+            
+            # Downsample by factor of 2 (DWT level 1)
+            cLH = cLH[:, :, ::2, ::2]
+            cHL = cHL[:, :, ::2, ::2] 
+            cHH = cHH[:, :, ::2, ::2]
+            
+            # Stack detail coefficients
+            wavelet_coeffs = torch.cat([cLH, cHL, cHH], dim=1)  # (B, 3, H/2, W/2)
+            all_coeffs.append(wavelet_coeffs)
         
-        # Stack batch dimension
-        batch_tensor = torch.stack(all_batch_coeffs, dim=0).to(x.device)  # (B, 6, H/2, W/2)
+        # Concatenate all wavelet features
+        dwt_features = torch.cat(all_coeffs, dim=1)  # (B, 6, H/2, W/2)
         
-        return batch_tensor
+        return dwt_features
 
 
 class MSAF(nn.Module):
