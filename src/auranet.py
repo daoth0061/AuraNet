@@ -359,7 +359,7 @@ class AuraNet(nn.Module):
         try:
             # Load pre-trained weights with mixed precision compatibility
             # Use weights_only=False for compatibility with older checkpoint formats
-            checkpoint = torch.load(pretrained_path, map_location='cpu', weights_only=False)
+            checkpoint = torch.load(pretrained_path, map_location='cpu')
             
             # Extract state dict (handle different checkpoint formats)
             if 'model' in checkpoint:
